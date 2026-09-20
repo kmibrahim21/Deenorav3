@@ -4,10 +4,10 @@
     <selectionStates>
       <SelectionState runConfigName="Deenora">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2026-07-21T13:51:23.636314100Z">
+        <DropdownSelection timestamp="2026-09-20T12:34:16.141193900Z">
           <Target type="DEFAULT_BOOT">
             <handle>
-              <DeviceId pluginId="PhysicalDevice" identifier="serial=US8XEETGGE9TJFAQ" />
+              <DeviceId pluginId="LocalEmulator" identifier="path=C:\Users\USER\.android\avd\Pixel_6.avd" />
             </handle>
           </Target>
         </DropdownSelection>

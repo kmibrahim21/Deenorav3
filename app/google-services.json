@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "212679814097",
+    "project_id": "deenora-3c9ca",
+    "storage_bucket": "deenora-3c9ca.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:212679814097:android:06ad45dd63ba55919c0ef0",
+        "android_client_info": {
+          "package_name": "app.deenora"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC_oLCDtd43BMZhu-J3mIMivilp0LtTTcs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
