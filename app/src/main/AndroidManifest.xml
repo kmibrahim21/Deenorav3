@@ -47,7 +47,7 @@
             android:foregroundServiceType="phoneCall" />
 
         <service
-            android:name="com.kmibrahim.deenorav3.Fcmservice"
+            android:name="com.kmibrahim.deenorav3.FcmService"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.messaging.MESSAGING_EVENT" />
