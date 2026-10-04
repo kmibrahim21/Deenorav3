@@ -13,7 +13,8 @@ import androidx.core.app.NotificationCompat
 class CallService : Service() {
 
     companion object {
-        const val CHANNEL_ID = "voice_call_channel"
+        // Unifying with MainActivity's standardized IDs
+        const val CHANNEL_ID = "deenora_call_channel_v12"
         const val NOTIFICATION_ID = 101
         private const val TAG = "CallService"
     }
@@ -46,19 +47,11 @@ class CallService : Service() {
             }
         }
 
-        // This is the "ringing" path — either a fresh call arriving via
-        // FCMService, or the service being restarted by the system with a
-        // null action (see note on START_STICKY below).
         if (callerName.isNotBlank()) {
             createNotificationChannel()
             showIncomingCallNotification(callerName, callId)
         }
 
-        // START_STICKY means Android may recreate this service with a null
-        // Intent after it's killed to free memory. Since a stale ringing
-        // notification with no caller info isn't useful, START_NOT_STICKY
-        // is actually the safer choice for a call service — restarting a
-        // call that's already over just leaves a phantom notification.
         return START_NOT_STICKY
     }
 
@@ -75,17 +68,17 @@ class CallService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val notificationManager = getSystemService(NotificationManager::class.java)
             if (notificationManager?.getNotificationChannel(CHANNEL_ID) == null) {
-                val channel = NotificationChannel(CHANNEL_ID, "Incoming Voice Calls", NotificationManager.IMPORTANCE_HIGH).apply {
-                    description = "Notification for incoming voice calls"
+                val channel = NotificationChannel(CHANNEL_ID, "Incoming Calls", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "Urgent call alerts"
                     enableVibration(true)
-                    vibrationPattern = longArrayOf(1000, 500, 1000, 500, 1000)
+                    vibrationPattern = longArrayOf(0, 500, 200, 500)
                     lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-
+                    
                     val audioAttributes = AudioAttributes.Builder()
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
                         .build()
-                    setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), audioAttributes)
+                    setSound(android.provider.Settings.System.DEFAULT_RINGTONE_URI, audioAttributes)
                 }
                 notificationManager?.createNotificationChannel(channel)
             }
@@ -94,11 +87,12 @@ class CallService : Service() {
 
     private fun showIncomingCallNotification(callerName: String, callId: String) {
         val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("INCOMING_CALL", true)
             putExtra("CALLER_NAME", callerName)
             putExtra("CALL_ID", callId)
         }
+        
         val fullScreenPendingIntent = PendingIntent.getActivity(
             this, 0, fullScreenIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -124,6 +118,8 @@ class CallService : Service() {
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .setOngoing(true)
             .setAutoCancel(false)
+            .setSilent(false)
+            .setDefaults(Notification.DEFAULT_ALL)
             .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
             .addAction(android.R.drawable.ic_menu_call, "Answer", answerPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePendingIntent)

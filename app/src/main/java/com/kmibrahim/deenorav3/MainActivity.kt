@@ -2,7 +2,6 @@ package com.kmibrahim.deenorav3
 
 import android.Manifest
 import android.app.DownloadManager
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.BroadcastReceiver
@@ -11,7 +10,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -19,7 +17,6 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
-import android.view.WindowManager
 import android.webkit.*
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -28,7 +25,6 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.util.*
@@ -37,25 +33,14 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
-
+    
     private lateinit var filePickerLauncher: ActivityResultLauncher<Intent>
     private lateinit var singlePhotoPickerLauncher: ActivityResultLauncher<PickVisualMediaRequest>
     private lateinit var multiPhotoPickerLauncher: ActivityResultLauncher<PickVisualMediaRequest>
     private lateinit var permissionLauncher: ActivityResultLauncher<Array<String>>
 
-    // --- Call-bridge state -------------------------------------------------
-    // Tracks whether deenora.app has actually finished loading. If a call
-    // intent arrives before this is true, we hold onto it and dispatch it
-    // once the page is ready — otherwise the JS call is fired into a blank
-    // page and silently lost, which was the original bug.
-    private var webViewReady = false
-    private data class PendingCall(val action: String, val callerName: String, val callId: String)
-    private var pendingCall: PendingCall? = null
-    // -------------------------------------------------------------------
-
     companion object {
         private const val CHANNEL_ID = "deenora_downloads"
-        private const val CALL_CHANNEL_ID = "voice_call_channel"
         private const val TAG = "DeenoraV3"
     }
 
@@ -64,7 +49,7 @@ class MainActivity : AppCompatActivity() {
             val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
             if (id != -1L) {
                 runOnUiThread {
-                    Toast.makeText(context, "ডাউনলোড সম্পন্ন হয়েছে। ফাইলটি 'Downloads' ফোল্ডারে দেখুন।", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "ডাউনলোড সম্পন্ন হয়েছে। ফাইলটি 'Downloads' ফোল্ডারে দেখুন।", Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -73,103 +58,26 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        setupLockScreen()
-
         webView = WebView(this)
         setContentView(webView)
 
         setupLaunchers()
         setupWebView()
 
-        // Parse any incoming-call intent BEFORE loadUrl — but do not try to
-        // talk to the page yet, it doesn't exist. handleIntent() below just
-        // queues it into pendingCall; onPageFinished() flushes it.
-        handleIntent(intent)
-
         webView.loadUrl("https://deenora.app")
 
         setupBackButton()
         checkAndRequestPermissions()
-        createNotificationChannels()
+        createNotificationChannel()
 
         val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Android 13+ এর জন্য Context.RECEIVER_EXPORTED ব্যবহার করা হয়েছে
             registerReceiver(onDownloadComplete, filter, Context.RECEIVER_EXPORTED)
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(onDownloadComplete, filter)
         }
-    }
-
-    private fun setupLockScreen() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            setTurnScreenOn(true)
-            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
-            keyguardManager.requestDismissKeyguard(this, null)
-        } else {
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                        WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
-                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-            )
-        }
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        // App was already running (foreground/background) — page is already
-        // loaded, so this can be dispatched straight away.
-        handleIntent(intent)
-    }
-
-    /**
-     * Reads the call extras CallService puts on the launch Intent and either
-     * dispatches them to the web app immediately (page already loaded) or
-     * queues them for onPageFinished to flush.
-     *
-     * action extra values coming from CallService:
-     *  - absent / "RINGING": user tapped the full-screen incoming-call notification
-     *  - "ANSWER": user tapped the Answer action on the notification
-     */
-    private fun handleIntent(intent: Intent?) {
-        if (intent?.getBooleanExtra("INCOMING_CALL", false) != true) return
-
-        val callerName = intent.getStringExtra("CALLER_NAME") ?: "Unknown Caller"
-        val callId = intent.getStringExtra("CALL_ID") ?: ""
-        val rawAction = intent.getStringExtra("ACTION") ?: "RINGING"
-        val jsAction = if (rawAction == "ANSWER") "answer" else "ringing"
-
-        val call = PendingCall(jsAction, callerName, callId)
-        if (webViewReady) {
-            dispatchCallToWeb(call)
-        } else {
-            pendingCall = call
-        }
-    }
-
-    /**
-     * Calls window.onNativeCallAction(action, callerName, callId) inside
-     * deenora.app. Your web app needs to define this function — have it
-     * show/hide the call UI and start/attach WebRTC based on `action`
-     * ("ringing" | "answer").
-     */
-    private fun dispatchCallToWeb(call: PendingCall) {
-        val js = """
-            (function() {
-                if (typeof window.onNativeCallAction === 'function') {
-                    window.onNativeCallAction(
-                        ${JSONObject.quote(call.action)},
-                        ${JSONObject.quote(call.callerName)},
-                        ${JSONObject.quote(call.callId)}
-                    );
-                } else {
-                    console.warn('onNativeCallAction is not defined on window yet');
-                }
-            })();
-        """.trimIndent()
-        webView.evaluateJavascript(js, null)
     }
 
     override fun onDestroy() {
@@ -214,22 +122,18 @@ class MainActivity : AppCompatActivity() {
         applySettings(webView)
 
         webView.webChromeClient = object : WebChromeClient() {
-            override fun onPermissionRequest(request: PermissionRequest) {
-                request.grant(request.resources)
-            }
-
             override fun onShowFileChooser(
-                webView: WebView?,
-                filePathCallback: ValueCallback<Array<Uri>>?,
+                webView: WebView?, 
+                filePathCallback: ValueCallback<Array<Uri>>?, 
                 fileChooserParams: FileChooserParams?
             ): Boolean {
                 this@MainActivity.filePathCallback?.onReceiveValue(null)
                 this@MainActivity.filePathCallback = filePathCallback
-
+                
                 val acceptTypes = fileChooserParams?.acceptTypes ?: arrayOf()
                 val isMultiple = fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE
                 val onlyMedia = acceptTypes.isNotEmpty() && acceptTypes.all { it.contains("image") || it.contains("video") }
-
+                
                 return try {
                     if (onlyMedia) {
                         val mediaType = when {
@@ -259,33 +163,27 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 injectBlobHook(view)
                 injectDownloadScripts(view)
-
-                webViewReady = true
-                pendingCall?.let {
-                    dispatchCallToWeb(it)
-                    pendingCall = null
-                }
             }
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url?.toString() ?: ""
-
+                
                 if (url.lowercase(Locale.ROOT).contains(".pdf") && !url.startsWith("blob:") && !url.startsWith("data:")) {
                     handleDownload(url, webView.settings.userAgentString, null, "application/pdf")
                     return true
                 }
-
+                
                 return handleExternalUrls(url, view)
             }
         }
 
-        webView.addJavascriptInterface(WebAppInterface(this), "Android")
-
+        webView.addJavascriptInterface(WebAppInterface(), "AndroidInterface")
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             handleDownload(url, userAgent, contentDisposition, mimeType)
         }
     }
 
     private fun handleExternalUrls(url: String, view: WebView?): Boolean {
+        // ১. ইউটিউব লিঙ্ক বা ইউটিউব অ্যাপ স্কিম হ্যান্ডেল করা
         if (url.contains("youtube.com") || url.contains("youtu.be") || url.startsWith("vnd.youtube:")) {
             try {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
@@ -297,6 +195,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // ২. intent:// ইউআরএল হ্যান্ডেল করা (YouTube প্রায়ই এটি ব্যবহার করে)
         if (url.startsWith("intent://")) {
             try {
                 val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
@@ -318,6 +217,7 @@ class MainActivity : AppCompatActivity() {
             return true
         }
 
+        // ৩. অন্যান্য সোশ্যাল মিডিয়া ও অ্যাপ (WhatsApp, Tel, etc.)
         if (url.contains("wa.me") || url.startsWith("whatsapp:") ||
             url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("sms:")) {
             try {
@@ -345,7 +245,6 @@ class MainActivity : AppCompatActivity() {
             setSupportMultipleWindows(false)
             javaScriptCanOpenWindowsAutomatically = true
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            mediaPlaybackRequiresUserGesture = false
             userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(v, true)
@@ -356,7 +255,7 @@ class MainActivity : AppCompatActivity() {
             webView.evaluateJavascript("if(typeof window.triggerDownload === 'function') window.triggerDownload('$url', '');", null)
             return
         }
-
+        
         var effectiveMimeType = mimeType
         if (effectiveMimeType.isNullOrEmpty()) {
             effectiveMimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(MimeTypeMap.getFileExtensionFromUrl(url))
@@ -384,22 +283,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveBase64ToFile(base64Data: String?, fileName: String?, mimeType: String?) {
         if (base64Data.isNullOrEmpty()) return
-
+        
         try {
             val dataPart = if (base64Data.contains(",")) base64Data.substringAfter(",") else base64Data
             val bytes = Base64.decode(dataPart.trim(), Base64.DEFAULT)
-
+            
             val map = MimeTypeMap.getSingleton()
             val cleanMime = mimeType?.split(";")?.get(0)?.trim()?.lowercase() ?: "application/pdf"
             var extension = map.getExtensionFromMimeType(cleanMime)
-
+            
             if (extension == null) {
                 if (cleanMime.contains("pdf") || (fileName != null && fileName.lowercase(Locale.ROOT).contains(".pdf"))) extension = "pdf"
             }
-
+            
             var cleanFileName = fileName?.ifEmpty { "deenora_file_" + System.currentTimeMillis() } ?: ("file_" + System.currentTimeMillis())
             cleanFileName = cleanFileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-
+            
             if (extension != null && !cleanFileName.lowercase(Locale.ROOT).endsWith(".$extension")) {
                 cleanFileName += ".$extension"
             } else if (extension == null && !cleanFileName.contains(".")) {
@@ -416,14 +315,14 @@ class MainActivity : AppCompatActivity() {
                 }
                 val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 if (uri != null) {
-                    contentResolver.openOutputStream(uri)?.use { os ->
+                    contentResolver.openOutputStream(uri)?.use { os -> 
                         os.write(bytes)
                         os.flush()
                     }
                     values.clear()
                     values.put(MediaStore.MediaColumns.IS_PENDING, 0)
                     contentResolver.update(uri, values, null, null)
-                    runOnUiThread { Toast.makeText(this, "Downloads ফোল্ডারে সেভ হয়েছে: $cleanFileName", Toast.LENGTH_LONG).show() }
+                    runOnUiThread { Toast.makeText(this, "Downloads ফোল্ডারে সেভ হয়েছে: $cleanFileName", Toast.LENGTH_LONG).show() }
                 }
             } else {
                 val directory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
@@ -431,11 +330,11 @@ class MainActivity : AppCompatActivity() {
                 val file = File(directory, cleanFileName)
                 FileOutputStream(file).use { it.write(bytes) }
                 android.media.MediaScannerConnection.scanFile(this, arrayOf(file.absolutePath), null, null)
-                runOnUiThread { Toast.makeText(this, "Downloads ফোল্ডারে সেভ হয়েছে: $cleanFileName", Toast.LENGTH_LONG).show() }
+                runOnUiThread { Toast.makeText(this, "Downloads ফোল্ডারে সেভ হয়েছে: $cleanFileName", Toast.LENGTH_LONG).show() }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Save error: ${e.message}")
-            runOnUiThread { Toast.makeText(this, "সেভ করতে সমস্যা হয়েছে: ${e.message}", Toast.LENGTH_SHORT).show() }
+            runOnUiThread { Toast.makeText(this, "সেভ করতে সমস্যা হয়েছে: ${e.message}", Toast.LENGTH_SHORT).show() }
         }
     }
 
@@ -468,14 +367,14 @@ class MainActivity : AppCompatActivity() {
                         if (blob) {
                             var reader = new FileReader();
                             reader.onloadend = function() {
-                                Android.downloadFile(reader.result, filename || 'document', blob.type || 'application/pdf');
+                                AndroidInterface.downloadFile(reader.result, filename || 'document', blob.type || 'application/pdf');
                             };
                             reader.readAsDataURL(blob);
                         } else {
                             fetch(url).then(r => r.blob()).then(b => {
                                 var reader = new FileReader();
                                 reader.onloadend = function() {
-                                    Android.downloadFile(reader.result, filename || 'document', b.type || 'application/pdf');
+                                    AndroidInterface.downloadFile(reader.result, filename || 'document', b.type || 'application/pdf');
                                 };
                                 reader.readAsDataURL(b);
                             }).catch(e => {
@@ -487,7 +386,7 @@ class MainActivity : AppCompatActivity() {
                                         var b = this.response;
                                         var reader = new FileReader();
                                         reader.onloadend = function() {
-                                            Android.downloadFile(reader.result, filename || 'document', b.type || 'application/pdf');
+                                            AndroidInterface.downloadFile(reader.result, filename || 'document', b.type || 'application/pdf');
                                         };
                                         reader.readAsDataURL(b);
                                     }
@@ -499,7 +398,7 @@ class MainActivity : AppCompatActivity() {
                         var p = url.split(',');
                         if (p.length > 1) {
                             var mime = p[0].split(':')[1].split(';')[0];
-                            Android.downloadFile(p[1], filename || 'document', mime);
+                            AndroidInterface.downloadFile(p[1], filename || 'document', mime);
                         }
                     }
                 };
@@ -511,7 +410,7 @@ class MainActivity : AppCompatActivity() {
                         e.preventDefault();
                     }
                 }, true);
-
+                
                 var origOpen = window.open;
                 window.open = function(url, name, specs) {
                     if (url && (url.startsWith('blob:') || url.startsWith('data:'))) {
@@ -539,64 +438,30 @@ class MainActivity : AppCompatActivity() {
                 permissions.add(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            permissions.add(Manifest.permission.RECORD_AUDIO)
-        }
-
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                 permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
             }
         }
-
         if (permissions.isNotEmpty()) {
             permissionLauncher.launch(permissions.toTypedArray())
         }
     }
 
-    private fun createNotificationChannels() {
+    private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-            val downloadChannel = NotificationChannel(CHANNEL_ID, "Downloads", NotificationManager.IMPORTANCE_DEFAULT)
-            notificationManager.createNotificationChannel(downloadChannel)
-
-            val callChannel = NotificationChannel(CALL_CHANNEL_ID, "Incoming Voice Calls", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Notification for incoming WebRTC voice calls"
-                enableVibration(true)
-                vibrationPattern = longArrayOf(1000, 500, 1000, 500, 1000)
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-
-                val audioAttributes = AudioAttributes.Builder()
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                    .build()
-                setSound(android.provider.Settings.System.DEFAULT_RINGTONE_URI, audioAttributes)
-            }
-            notificationManager.createNotificationChannel(callChannel)
+            val channel = NotificationChannel(CHANNEL_ID, "Downloads", NotificationManager.IMPORTANCE_DEFAULT)
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
         }
     }
 
-    inner class WebAppInterface(private val context: Context) {
+    inner class WebAppInterface {
         @JavascriptInterface
         fun downloadFile(base64: String, name: String, mime: String) {
             runOnUiThread {
                 Toast.makeText(this@MainActivity, "ডাউনলোড শুরু হচ্ছে...", Toast.LENGTH_SHORT).show()
             }
             saveBase64ToFile(base64, name, mime)
-        }
-
-        /**
-         * Call this from deenora.app's JS once the user hangs up / declines
-         * from the web UI, so the persistent call notification is cleared.
-         */
-        @JavascriptInterface
-        fun stopCallService() {
-            val intent = Intent(context, CallService::class.java).apply {
-                action = "STOP_SERVICE"
-            }
-            ContextCompat.startForegroundService(context, intent)
         }
     }
 }
