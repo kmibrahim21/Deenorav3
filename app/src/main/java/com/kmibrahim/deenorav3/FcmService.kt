@@ -39,10 +39,10 @@ class FcmService : FirebaseMessagingService() {
         private const val PREFS = "deenora_push"
         private const val KEY_TOKEN = "fcm_token"
 
-        // TODO (Ibrahim): ei URL ta deenora.app backend e ache kina confirm koro.
-        // Endpoint ta POST { token, platform } accept kore device token save korbe
-        // (logged-in institute/user er against e). Na thakle backend e banate hobe.
-        private const val TOKEN_REGISTER_URL = "https://deenora.app/api/device-token"
+        // Backend endpoint already exists: POST /api/call?action=register_token
+        // (api/call.ts -> register_token action). Saves {token, phone, user_id,
+        // student_id, institution_id} to Supabase device_tokens table.
+        private const val TOKEN_REGISTER_URL = "https://deenora.app/api/call?action=register_token"
 
         private const val GENERIC_CHANNEL_ID = "deenora_updates"
         private const val GENERIC_NOTIFICATION_ID = 102

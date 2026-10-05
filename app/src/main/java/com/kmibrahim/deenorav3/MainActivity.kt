@@ -33,7 +33,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
-    
+
     private lateinit var filePickerLauncher: ActivityResultLauncher<Intent>
     private lateinit var singlePhotoPickerLauncher: ActivityResultLauncher<PickVisualMediaRequest>
     private lateinit var multiPhotoPickerLauncher: ActivityResultLauncher<PickVisualMediaRequest>
@@ -60,6 +60,9 @@ class MainActivity : AppCompatActivity() {
 
         webView = WebView(this)
         setContentView(webView)
+
+        // FCM push token sync — protibar app launch e token fetch + backend e register
+        FcmService.syncToken(this)
 
         setupLaunchers()
         setupWebView()
@@ -122,18 +125,24 @@ class MainActivity : AppCompatActivity() {
         applySettings(webView)
 
         webView.webChromeClient = object : WebChromeClient() {
+            // WebRTC voice-call mic/camera permission — auto-grant
+            // (Android-level RECORD_AUDIO permission app launch e alada kore chawa hoy)
+            override fun onPermissionRequest(request: PermissionRequest?) {
+                request?.grant(request.resources)
+            }
+
             override fun onShowFileChooser(
-                webView: WebView?, 
-                filePathCallback: ValueCallback<Array<Uri>>?, 
+                webView: WebView?,
+                filePathCallback: ValueCallback<Array<Uri>>?,
                 fileChooserParams: FileChooserParams?
             ): Boolean {
                 this@MainActivity.filePathCallback?.onReceiveValue(null)
                 this@MainActivity.filePathCallback = filePathCallback
-                
+
                 val acceptTypes = fileChooserParams?.acceptTypes ?: arrayOf()
                 val isMultiple = fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE
                 val onlyMedia = acceptTypes.isNotEmpty() && acceptTypes.all { it.contains("image") || it.contains("video") }
-                
+
                 return try {
                     if (onlyMedia) {
                         val mediaType = when {
@@ -166,12 +175,12 @@ class MainActivity : AppCompatActivity() {
             }
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url?.toString() ?: ""
-                
+
                 if (url.lowercase(Locale.ROOT).contains(".pdf") && !url.startsWith("blob:") && !url.startsWith("data:")) {
                     handleDownload(url, webView.settings.userAgentString, null, "application/pdf")
                     return true
                 }
-                
+
                 return handleExternalUrls(url, view)
             }
         }
@@ -244,6 +253,7 @@ class MainActivity : AppCompatActivity() {
             loadWithOverviewMode = true
             setSupportMultipleWindows(false)
             javaScriptCanOpenWindowsAutomatically = true
+            mediaPlaybackRequiresUserGesture = false
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
         }
@@ -255,7 +265,7 @@ class MainActivity : AppCompatActivity() {
             webView.evaluateJavascript("if(typeof window.triggerDownload === 'function') window.triggerDownload('$url', '');", null)
             return
         }
-        
+
         var effectiveMimeType = mimeType
         if (effectiveMimeType.isNullOrEmpty()) {
             effectiveMimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(MimeTypeMap.getFileExtensionFromUrl(url))
@@ -283,22 +293,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveBase64ToFile(base64Data: String?, fileName: String?, mimeType: String?) {
         if (base64Data.isNullOrEmpty()) return
-        
+
         try {
             val dataPart = if (base64Data.contains(",")) base64Data.substringAfter(",") else base64Data
             val bytes = Base64.decode(dataPart.trim(), Base64.DEFAULT)
-            
+
             val map = MimeTypeMap.getSingleton()
             val cleanMime = mimeType?.split(";")?.get(0)?.trim()?.lowercase() ?: "application/pdf"
             var extension = map.getExtensionFromMimeType(cleanMime)
-            
+
             if (extension == null) {
                 if (cleanMime.contains("pdf") || (fileName != null && fileName.lowercase(Locale.ROOT).contains(".pdf"))) extension = "pdf"
             }
-            
+
             var cleanFileName = fileName?.ifEmpty { "deenora_file_" + System.currentTimeMillis() } ?: ("file_" + System.currentTimeMillis())
             cleanFileName = cleanFileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-            
+
             if (extension != null && !cleanFileName.lowercase(Locale.ROOT).endsWith(".$extension")) {
                 cleanFileName += ".$extension"
             } else if (extension == null && !cleanFileName.contains(".")) {
@@ -315,7 +325,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 if (uri != null) {
-                    contentResolver.openOutputStream(uri)?.use { os -> 
+                    contentResolver.openOutputStream(uri)?.use { os ->
                         os.write(bytes)
                         os.flush()
                     }
@@ -438,6 +448,10 @@ class MainActivity : AppCompatActivity() {
                 permissions.add(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
+        // WebRTC voice call er jonno mic permission
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.RECORD_AUDIO)
+        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                 permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -462,6 +476,16 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "ডাউনলোড শুরু হচ্ছে...", Toast.LENGTH_SHORT).show()
             }
             saveBase64ToFile(base64, name, mime)
+        }
+
+        // Web app (deenora.app) theke native FCM token porar jonno.
+        // Parent login er por web ei token + student_id/phone diye
+        // /api/call?action=register_token e register kore, jate server
+        // pore push notification pathate pare.
+        @JavascriptInterface
+        fun getFcmToken(): String {
+            return getSharedPreferences("deenora_push", Context.MODE_PRIVATE)
+                .getString("fcm_token", "") ?: ""
         }
     }
 }
