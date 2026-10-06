@@ -61,13 +61,14 @@ class MainActivity : AppCompatActivity() {
         webView = WebView(this)
         setContentView(webView)
 
-        // FCM push token sync — protibar app launch e token fetch + backend e register
+        // FCM push token sync
         FcmService.syncToken(this)
+        KeepAliveService.start(this)
 
         setupLaunchers()
         setupWebView()
 
-        webView.loadUrl("https://deenora.app")
+        webView.loadUrl(buildStartUrl(intent))
 
         setupBackButton()
         checkAndRequestPermissions()
@@ -75,7 +76,6 @@ class MainActivity : AppCompatActivity() {
 
         val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Android 13+ এর জন্য Context.RECEIVER_EXPORTED ব্যবহার করা হয়েছে
             registerReceiver(onDownloadComplete, filter, Context.RECEIVER_EXPORTED)
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag")
@@ -88,6 +88,36 @@ class MainActivity : AppCompatActivity() {
         try {
             unregisterReceiver(onDownloadComplete)
         } catch (e: Exception) { }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val url = buildStartUrl(intent)
+        if (url != "https://deenora.app") {
+            webView.loadUrl(url)
+        }
+    }
+
+    private fun buildStartUrl(intent: Intent?): String {
+        val extras = intent?.extras ?: return "https://deenora.app"
+        val callerName = extras.getString("caller_name")
+        val callId = extras.getString("call_id")
+        val type = extras.getString("type")
+
+        if (!callerName.isNullOrBlank() || type == "incoming_call") {
+            val params = StringBuilder("https://deenora.app?fcm_tap=1")
+            if (!callId.isNullOrBlank()) params.append("&call_id=").append(Uri.encode(callId))
+            if (!callerName.isNullOrBlank()) params.append("&caller_name=").append(Uri.encode(callerName))
+            extras.getString("student_name")?.takeIf { it.isNotBlank() }?.let {
+                params.append("&student_name=").append(Uri.encode(it))
+            }
+            extras.getString("institution_id")?.takeIf { it.isNotBlank() }?.let {
+                params.append("&institution_id=").append(Uri.encode(it))
+            }
+            return params.toString()
+        }
+        return "https://deenora.app"
     }
 
     private fun setupLaunchers() {
@@ -125,10 +155,37 @@ class MainActivity : AppCompatActivity() {
         applySettings(webView)
 
         webView.webChromeClient = object : WebChromeClient() {
-            // WebRTC voice-call mic/camera permission — auto-grant
-            // (Android-level RECORD_AUDIO permission app launch e alada kore chawa hoy)
             override fun onPermissionRequest(request: PermissionRequest?) {
                 request?.grant(request.resources)
+            }
+
+            // Fix for Google Sign-in: Handling popups
+            override fun onCreateWindow(
+                view: WebView?,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: android.os.Message?
+            ): Boolean {
+                val newWebView = WebView(this@MainActivity)
+                applySettings(newWebView)
+                newWebView.webChromeClient = this
+                
+                // Redirect popup navigation to the main WebView
+                newWebView.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                        val url = request?.url?.toString()
+                        if (url != null) {
+                            webView.loadUrl(url)
+                            return true
+                        }
+                        return false
+                    }
+                }
+
+                val transport = resultMsg?.obj as? WebView.WebViewTransport
+                transport?.webView = newWebView
+                resultMsg?.sendToTarget()
+                return true
             }
 
             override fun onShowFileChooser(
@@ -175,12 +232,10 @@ class MainActivity : AppCompatActivity() {
             }
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url?.toString() ?: ""
-
                 if (url.lowercase(Locale.ROOT).contains(".pdf") && !url.startsWith("blob:") && !url.startsWith("data:")) {
                     handleDownload(url, webView.settings.userAgentString, null, "application/pdf")
                     return true
                 }
-
                 return handleExternalUrls(url, view)
             }
         }
@@ -192,7 +247,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleExternalUrls(url: String, view: WebView?): Boolean {
-        // ১. ইউটিউব লিঙ্ক বা ইউটিউব অ্যাপ স্কিম হ্যান্ডেল করা
         if (url.contains("youtube.com") || url.contains("youtu.be") || url.startsWith("vnd.youtube:")) {
             try {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
@@ -203,8 +257,6 @@ class MainActivity : AppCompatActivity() {
                 return false
             }
         }
-
-        // ২. intent:// ইউআরএল হ্যান্ডেল করা (YouTube প্রায়ই এটি ব্যবহার করে)
         if (url.startsWith("intent://")) {
             try {
                 val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
@@ -220,13 +272,9 @@ class MainActivity : AppCompatActivity() {
                     }
                     return true
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Intent error: ${e.message}")
-            }
+            } catch (e: Exception) { }
             return true
         }
-
-        // ৩. অন্যান্য সোশ্যাল মিডিয়া ও অ্যাপ (WhatsApp, Tel, etc.)
         if (url.contains("wa.me") || url.startsWith("whatsapp:") ||
             url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("sms:")) {
             try {
@@ -235,7 +283,6 @@ class MainActivity : AppCompatActivity() {
                 startActivity(intent)
                 return true
             } catch (e: Exception) {
-                if (url.contains("whatsapp")) Toast.makeText(this, "WhatsApp not installed", Toast.LENGTH_SHORT).show()
                 return false
             }
         }
@@ -251,11 +298,12 @@ class MainActivity : AppCompatActivity() {
             databaseEnabled = true
             useWideViewPort = true
             loadWithOverviewMode = true
-            setSupportMultipleWindows(false)
+            setSupportMultipleWindows(true) // Required for Google Sign-in popups
             javaScriptCanOpenWindowsAutomatically = true
             mediaPlaybackRequiresUserGesture = false
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
+            // Modern Chrome User-Agent to ensure Google allows Sign-in
+            userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(v, true)
     }
@@ -265,13 +313,10 @@ class MainActivity : AppCompatActivity() {
             webView.evaluateJavascript("if(typeof window.triggerDownload === 'function') window.triggerDownload('$url', '');", null)
             return
         }
-
         var effectiveMimeType = mimeType
         if (effectiveMimeType.isNullOrEmpty()) {
             effectiveMimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(MimeTypeMap.getFileExtensionFromUrl(url))
         }
-        if (effectiveMimeType == null && url.lowercase(Locale.ROOT).contains(".pdf")) effectiveMimeType = "application/pdf"
-
         try {
             val fileName = URLUtil.guessFileName(url, contentDisposition, effectiveMimeType)
             val request = DownloadManager.Request(Uri.parse(url)).apply {
@@ -281,11 +326,8 @@ class MainActivity : AppCompatActivity() {
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
                 setTitle(fileName)
-                setAllowedOverMetered(true)
-                setAllowedOverRoaming(true)
             }
             (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-            Toast.makeText(this, "ডাউনলোড শুরু হচ্ছে: $fileName", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (ex: Exception) { }
         }
@@ -293,59 +335,27 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveBase64ToFile(base64Data: String?, fileName: String?, mimeType: String?) {
         if (base64Data.isNullOrEmpty()) return
-
         try {
             val dataPart = if (base64Data.contains(",")) base64Data.substringAfter(",") else base64Data
             val bytes = Base64.decode(dataPart.trim(), Base64.DEFAULT)
-
-            val map = MimeTypeMap.getSingleton()
-            val cleanMime = mimeType?.split(";")?.get(0)?.trim()?.lowercase() ?: "application/pdf"
-            var extension = map.getExtensionFromMimeType(cleanMime)
-
-            if (extension == null) {
-                if (cleanMime.contains("pdf") || (fileName != null && fileName.lowercase(Locale.ROOT).contains(".pdf"))) extension = "pdf"
-            }
-
             var cleanFileName = fileName?.ifEmpty { "deenora_file_" + System.currentTimeMillis() } ?: ("file_" + System.currentTimeMillis())
             cleanFileName = cleanFileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-
-            if (extension != null && !cleanFileName.lowercase(Locale.ROOT).endsWith(".$extension")) {
-                cleanFileName += ".$extension"
-            } else if (extension == null && !cleanFileName.contains(".")) {
-                cleanFileName += ".pdf"
-                extension = "pdf"
-            }
-
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, cleanFileName)
-                    put(MediaStore.MediaColumns.MIME_TYPE, if (extension == "pdf") "application/pdf" else cleanMime)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                     put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                     put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
                 val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 if (uri != null) {
-                    contentResolver.openOutputStream(uri)?.use { os ->
-                        os.write(bytes)
-                        os.flush()
-                    }
+                    contentResolver.openOutputStream(uri)?.use { os -> os.write(bytes) }
                     values.clear()
                     values.put(MediaStore.MediaColumns.IS_PENDING, 0)
                     contentResolver.update(uri, values, null, null)
-                    runOnUiThread { Toast.makeText(this, "Downloads ফোল্ডারে সেভ হয়েছে: $cleanFileName", Toast.LENGTH_LONG).show() }
                 }
-            } else {
-                val directory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                if (!directory.exists()) directory.mkdirs()
-                val file = File(directory, cleanFileName)
-                FileOutputStream(file).use { it.write(bytes) }
-                android.media.MediaScannerConnection.scanFile(this, arrayOf(file.absolutePath), null, null)
-                runOnUiThread { Toast.makeText(this, "Downloads ফোল্ডারে সেভ হয়েছে: $cleanFileName", Toast.LENGTH_LONG).show() }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Save error: ${e.message}")
-            runOnUiThread { Toast.makeText(this, "সেভ করতে সমস্যা হয়েছে: ${e.message}", Toast.LENGTH_SHORT).show() }
-        }
+        } catch (e: Exception) { }
     }
 
     private fun injectBlobHook(view: WebView?) {
@@ -369,7 +379,6 @@ class MainActivity : AppCompatActivity() {
             (function() {
                 if (window.deenoraScriptsLoaded) return;
                 window.deenoraScriptsLoaded = true;
-
                 window.triggerDownload = function(url, filename) {
                     if (!url) return;
                     if (url.startsWith('blob:')) {
@@ -380,54 +389,8 @@ class MainActivity : AppCompatActivity() {
                                 AndroidInterface.downloadFile(reader.result, filename || 'document', blob.type || 'application/pdf');
                             };
                             reader.readAsDataURL(blob);
-                        } else {
-                            fetch(url).then(r => r.blob()).then(b => {
-                                var reader = new FileReader();
-                                reader.onloadend = function() {
-                                    AndroidInterface.downloadFile(reader.result, filename || 'document', b.type || 'application/pdf');
-                                };
-                                reader.readAsDataURL(b);
-                            }).catch(e => {
-                                var xhr = new XMLHttpRequest();
-                                xhr.open('GET', url, true);
-                                xhr.responseType = 'blob';
-                                xhr.onload = function() {
-                                    if (this.status === 200) {
-                                        var b = this.response;
-                                        var reader = new FileReader();
-                                        reader.onloadend = function() {
-                                            AndroidInterface.downloadFile(reader.result, filename || 'document', b.type || 'application/pdf');
-                                        };
-                                        reader.readAsDataURL(b);
-                                    }
-                                };
-                                xhr.send();
-                            });
-                        }
-                    } else if (url.startsWith('data:')) {
-                        var p = url.split(',');
-                        if (p.length > 1) {
-                            var mime = p[0].split(':')[1].split(';')[0];
-                            AndroidInterface.downloadFile(p[1], filename || 'document', mime);
                         }
                     }
-                };
-
-                document.addEventListener('click', function(e) {
-                    var a = e.target.closest('a');
-                    if (a && a.href && (a.href.startsWith('data:') || a.href.startsWith('blob:'))) {
-                        window.triggerDownload(a.href, a.getAttribute('download'));
-                        e.preventDefault();
-                    }
-                }, true);
-                
-                var origOpen = window.open;
-                window.open = function(url, name, specs) {
-                    if (url && (url.startsWith('blob:') || url.startsWith('data:'))) {
-                        window.triggerDownload(url, '');
-                        return null;
-                    }
-                    return origOpen(url, name, specs);
                 };
             })();
         """.trimIndent(), null)
@@ -448,14 +411,8 @@ class MainActivity : AppCompatActivity() {
                 permissions.add(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-        // WebRTC voice call er jonno mic permission
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             permissions.add(Manifest.permission.RECORD_AUDIO)
-        }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            }
         }
         if (permissions.isNotEmpty()) {
             permissionLauncher.launch(permissions.toTypedArray())
@@ -472,20 +429,12 @@ class MainActivity : AppCompatActivity() {
     inner class WebAppInterface {
         @JavascriptInterface
         fun downloadFile(base64: String, name: String, mime: String) {
-            runOnUiThread {
-                Toast.makeText(this@MainActivity, "ডাউনলোড শুরু হচ্ছে...", Toast.LENGTH_SHORT).show()
-            }
             saveBase64ToFile(base64, name, mime)
         }
 
-        // Web app (deenora.app) theke native FCM token porar jonno.
-        // Parent login er por web ei token + student_id/phone diye
-        // /api/call?action=register_token e register kore, jate server
-        // pore push notification pathate pare.
         @JavascriptInterface
         fun getFcmToken(): String {
-            return getSharedPreferences("deenora_push", Context.MODE_PRIVATE)
-                .getString("fcm_token", "") ?: ""
+            return getSharedPreferences("deenora_push", Context.MODE_PRIVATE).getString("fcm_token", "") ?: ""
         }
     }
 }
