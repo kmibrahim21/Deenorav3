@@ -169,7 +169,7 @@ class MainActivity : AppCompatActivity() {
                 val newWebView = WebView(this@MainActivity)
                 applySettings(newWebView)
                 newWebView.webChromeClient = this
-                
+
                 // Redirect popup navigation to the main WebView
                 newWebView.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -241,6 +241,20 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.addJavascriptInterface(WebAppInterface(), "AndroidInterface")
+
+        // Native Google Sign-In bridge — phone er account picker khulbe (existing Gmail list soho)
+        webView.addJavascriptInterface(
+            GoogleSignInBridge(this) { idToken ->
+                runOnUiThread {
+                    webView.evaluateJavascript(
+                        "window.onNativeGoogleToken && window.onNativeGoogleToken(${if (idToken != null) "'$idToken'" else "null"})",
+                        null
+                    )
+                }
+            },
+            "AndroidGoogleSignIn"
+        )
+
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             handleDownload(url, userAgent, contentDisposition, mimeType)
         }
