@@ -13,3 +13,16 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Secrets / signing
+keystore.properties
+*.jks
+*.keystore
+app/release/
+# Crash logs, builds, IDE
+hs_err_pid*.log
+replay_pid*.log
+.idea/
+*.apk
+*.aab
+*.exe

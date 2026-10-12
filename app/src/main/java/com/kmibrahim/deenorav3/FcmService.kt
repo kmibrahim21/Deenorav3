@@ -105,13 +105,16 @@ class FcmService : FirebaseMessagingService() {
         val callerName = data["caller_name"] ?: data["CALLER_NAME"]
         val callId = data["call_id"] ?: data["CALL_ID"] ?: ""
 
+        // Caller hung up before we answered -> stop ringing.
+        // Backend must send data: { type: "call_cancel", call_id: "..." } (high priority)
+        if (data["type"] == "call_cancel") {
+            CallService.cancelIfMatches(this, callId)
+            return
+        }
+
         if (!callerName.isNullOrBlank()) {
             // Incoming call -> full-screen call UI
-            val intent = Intent(this, CallService::class.java).apply {
-                putExtra("CALLER_NAME", callerName)
-                putExtra("CALL_ID", callId)
-            }
-            ContextCompat.startForegroundService(this, intent)
+            CallService.start(this, callerName, callId)
         } else {
             val title = data["title"] ?: message.notification?.title ?: "Deenora"
             val body = data["body"] ?: message.notification?.body ?: ""

@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -19,12 +22,24 @@ android {
     }
 
     signingConfigs {
+        // keystore.properties ফাইল থেকে ডাটা পড়ার লজিক
+        val keystorePropertiesFile = rootProject.file("keystore.properties")
+        val keystoreProperties = Properties()
+        if (keystorePropertiesFile.exists()) {
+            keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+        }
+
         create("release") {
-            // Using the path confirmed as correct by the user
-            storeFile = file("E:\\DEENORA3\\Deenora")
-            storePassword = "269596"
-            keyAlias = "km"
-            keyPassword = "269596"
+            // যদি প্রপার্টি ফাইলে ভ্যালু থাকে তবে সেটি নিবে, নাহলে আপনার দেওয়া ডিফল্ট পাথ/পাসওয়ার্ড ব্যবহার করবে
+            storeFile = if (keystoreProperties.containsKey("storeFile")) {
+                file(keystoreProperties["storeFile"] as String)
+            } else {
+                file("E:\\DEENORA3\\Deenora")
+            }
+
+            storePassword = (keystoreProperties["storePassword"] as? String) ?: "269596"
+            keyAlias = (keystoreProperties["keyAlias"] as? String) ?: "km"
+            keyPassword = (keystoreProperties["keyPassword"] as? String) ?: "269596"
         }
     }
 
@@ -44,7 +59,7 @@ android {
             }
         }
         debug {
-            // Using the same signing configuration for consistency
+            // Debug মোডেও একই সাইনিং ব্যবহার করা হচ্ছে যাতে গুগল সাইন-ইন কাজ করে
             signingConfig = signingConfigs.getByName("release")
         }
     }

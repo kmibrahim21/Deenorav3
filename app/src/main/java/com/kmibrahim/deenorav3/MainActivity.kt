@@ -14,6 +14,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.media.AudioManager
+import android.provider.Settings
 import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
@@ -73,6 +75,8 @@ class MainActivity : AppCompatActivity() {
         setupBackButton()
         checkAndRequestPermissions()
         createNotificationChannel()
+        requestFullScreenIntentAccessIfNeeded()
+        handleCallAction(intent)
 
         val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -93,6 +97,7 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handleCallAction(intent)
         val url = buildStartUrl(intent)
         if (url != "https://deenora.app") {
             webView.loadUrl(url)
@@ -109,6 +114,7 @@ class MainActivity : AppCompatActivity() {
             val params = StringBuilder("https://deenora.app?fcm_tap=1")
             if (!callId.isNullOrBlank()) params.append("&call_id=").append(Uri.encode(callId))
             if (!callerName.isNullOrBlank()) params.append("&caller_name=").append(Uri.encode(callerName))
+            if (extras.getString("call_action") == "answer") params.append("&answer=1")
             extras.getString("student_name")?.takeIf { it.isNotBlank() }?.let {
                 params.append("&student_name=").append(Uri.encode(it))
             }
@@ -156,7 +162,16 @@ class MainActivity : AppCompatActivity() {
 
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest?) {
-                request?.grant(request.resources)
+                // Only our own site may use the microphone (voice calls only)
+                val host = request?.origin?.host ?: ""
+                if (request != null && (host == "deenora.app" || host.endsWith(".deenora.app"))) {
+                    val allowed = request.resources
+                        .filter { it == PermissionRequest.RESOURCE_AUDIO_CAPTURE }
+                        .toTypedArray()
+                    if (allowed.isNotEmpty()) request.grant(allowed) else request.deny()
+                } else {
+                    request?.deny()
+                }
             }
 
             // Fix for Google Sign-in: Handling popups
@@ -236,7 +251,12 @@ class MainActivity : AppCompatActivity() {
                     handleDownload(url, webView.settings.userAgentString, null, "application/pdf")
                     return true
                 }
-                return handleExternalUrls(url, view)
+                if (handleExternalUrls(url, view)) return true
+                if (!isTrustedUrl(url)) {
+                    openInBrowser(url)
+                    return true
+                }
+                return false
             }
         }
 
@@ -440,7 +460,73 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun isTrustedUrl(url: String): Boolean {
+        val uri = Uri.parse(url)
+        val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return true
+        if (scheme != "http" && scheme != "https") return true // blob:, data:, about: ...
+        val host = uri.host?.lowercase(Locale.ROOT) ?: return false
+        // Add more domains here if login/payment redirects break
+        val trusted = listOf("deenora.app", "google.com", "firebaseapp.com", "googleapis.com", "supabase.co")
+        return trusted.any { host == it || host.endsWith(".$it") }
+    }
+
+    private fun openInBrowser(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Exception) { }
+    }
+
+    /** Answer tapped on the notification -> stop ringing (web page then connects the call). */
+    private fun handleCallAction(intent: Intent?) {
+        if (intent?.getStringExtra("call_action") == "answer") {
+            CallService.stop(this)
+        }
+    }
+
+    /** Android 14+: full-screen incoming call UI needs this to be allowed. Asked once. */
+    private fun requestFullScreenIntentAccessIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val nm = getSystemService(NotificationManager::class.java)
+            val prefs = getSharedPreferences("deenora_push", Context.MODE_PRIVATE)
+            if (!nm.canUseFullScreenIntent() && !prefs.getBoolean("fsi_prompted", false)) {
+                prefs.edit().putBoolean("fsi_prompted", true).apply()
+                try {
+                    startActivity(
+                        Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:$packageName"))
+                    )
+                } catch (_: Exception) { }
+            }
+        }
+    }
+
     inner class WebAppInterface {
+        /** Web: call AndroidInterface.stopRinging() when user answers/declines inside the page. */
+        @JavascriptInterface
+        fun stopRinging() {
+            CallService.stop(this@MainActivity)
+        }
+
+        /** Web: call AndroidInterface.callStarted() when the voice call connects. */
+        @JavascriptInterface
+        fun callStarted() {
+            runOnUiThread {
+                CallService.stop(this@MainActivity)
+                val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                OngoingCallService.start(this@MainActivity)
+            }
+        }
+
+        /** Web: call AndroidInterface.callEnded() when the call finishes. */
+        @JavascriptInterface
+        fun callEnded() {
+            runOnUiThread {
+                OngoingCallService.stop(this@MainActivity)
+                val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                am.mode = AudioManager.MODE_NORMAL
+            }
+        }
+
         @JavascriptInterface
         fun downloadFile(base64: String, name: String, mime: String) {
             saveBase64ToFile(base64, name, mime)

@@ -7,3 +7,8 @@
 -keepattributes SourceFile,LineNumberTable
 -keepattributes *Annotation*
 -keepattributes Signature
+
+# Keep every JS bridge method (GoogleSignInBridge, WebAppInterface)
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
