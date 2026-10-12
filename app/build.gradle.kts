@@ -1,5 +1,4 @@
 import java.util.Properties
-import java.io.FileInputStream
 
 plugins {
     alias(libs.plugins.android.application)
@@ -21,25 +20,21 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Keystore info lives in keystore.properties (NOT committed). See keystore.properties.example
+    val keystoreProps = Properties().apply {
+        val f = rootProject.file("keystore.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    val hasKeystore = keystoreProps.containsKey("storeFile")
+
     signingConfigs {
-        // keystore.properties ফাইল থেকে ডাটা পড়ার লজিক
-        val keystorePropertiesFile = rootProject.file("keystore.properties")
-        val keystoreProperties = Properties()
-        if (keystorePropertiesFile.exists()) {
-            keystoreProperties.load(FileInputStream(keystorePropertiesFile))
-        }
-
-        create("release") {
-            // যদি প্রপার্টি ফাইলে ভ্যালু থাকে তবে সেটি নিবে, নাহলে আপনার দেওয়া ডিফল্ট পাথ/পাসওয়ার্ড ব্যবহার করবে
-            storeFile = if (keystoreProperties.containsKey("storeFile")) {
-                file(keystoreProperties["storeFile"] as String)
-            } else {
-                file("E:\\DEENORA3\\Deenora")
+        if (hasKeystore) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
             }
-
-            storePassword = (keystoreProperties["storePassword"] as? String) ?: "269596"
-            keyAlias = (keystoreProperties["keyAlias"] as? String) ?: "km"
-            keyPassword = (keystoreProperties["keyPassword"] as? String) ?: "269596"
         }
     }
 
@@ -47,7 +42,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            if (hasKeystore) signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -59,8 +54,8 @@ android {
             }
         }
         debug {
-            // Debug মোডেও একই সাইনিং ব্যবহার করা হচ্ছে যাতে গুগল সাইন-ইন কাজ করে
-            signingConfig = signingConfigs.getByName("release")
+            // Same key as release so Google Sign-in SHA-1 keeps working (if keystore.properties exists)
+            if (hasKeystore) signingConfig = signingConfigs.getByName("release")
         }
     }
 
