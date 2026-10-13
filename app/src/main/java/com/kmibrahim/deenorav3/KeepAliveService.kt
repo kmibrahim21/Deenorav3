@@ -74,17 +74,11 @@ class KeepAliveService : Service() {
             .setShowWhen(false)
             .setContentIntent(pendingIntent)
             .build()
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIF_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Fallback to none or dataSync for older versions if needed, 
-            // but for keep-alive, 0 (none) is often sufficient or specified type.
-            startForeground(NOTIF_ID, notification)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIF_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
         } else {
             startForeground(NOTIF_ID, notification)
         }
-
         Log.d(TAG, "KeepAliveService running in foreground")
         return START_STICKY
     }
