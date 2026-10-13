@@ -59,6 +59,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        wakeAndUnlockScreen()
 
         webView = WebView(this)
         setContentView(webView)
@@ -97,10 +98,29 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        wakeAndUnlockScreen()
         handleCallAction(intent)
         val url = buildStartUrl(intent)
         if (url != "https://deenora.app") {
             webView.loadUrl(url)
+        }
+    }
+
+    /** Screen off / lock screen thakle display jagiye tola (incoming call er jonno) */
+    private fun wakeAndUnlockScreen() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+            val km = getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+            km?.requestDismissKeyguard(this, null)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                        android.view.WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+                        android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                        android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
         }
     }
 
@@ -396,7 +416,6 @@ class MainActivity : AppCompatActivity() {
         view?.evaluateJavascript("""
             (function() {
                 if (window.deenoraBlobHooked) return;
-                window.deenoraBlobHooked = true;
                 window.deenoraBlobs = window.deenoraBlobs || {};
                 var origCreate = URL.createObjectURL;
                 URL.createObjectURL = function(obj) {
