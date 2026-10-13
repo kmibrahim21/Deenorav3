@@ -49,6 +49,12 @@
             android:foregroundServiceType="phoneCall" />
 
         <service
+            android:name="com.kmibrahim.deenorav3.OngoingCallService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <service
             android:name="com.kmibrahim.deenorav3.FcmService"
             android:exported="false">
             <intent-filter>

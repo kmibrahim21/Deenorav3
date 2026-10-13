@@ -3,6 +3,7 @@ package com.kmibrahim.deenorav3
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.Ringtone
@@ -14,14 +15,16 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 
 class CallService : Service() {
 
     companion object {
-        // v16 ensures any cached channel settings with silent/disabled flags are reset
-        const val CHANNEL_ID = "deenora_incoming_calls_v16"
+        // v17确保全新的 Alerting Notification Channel তৈরি হবে
+        const val CHANNEL_ID = "deenora_incoming_calls_v17"
         const val NOTIFICATION_ID = 101
         private const val TAG = "CallService"
         private const val RING_TIMEOUT_MS = 45_000L
@@ -79,22 +82,22 @@ class CallService : Service() {
 
         Log.d(TAG, "Processing incoming call from: $callerName (callId: $callId)")
 
-        // 1. Wake the screen immediately
+        // ১. স্ক্রিন লাইট সাথে সাথে জ্বালিয়ে রাখা
         acquireScreenWakeLock()
 
-        // 2. Setup notification channel
+        // ২. হাই-প্রায়োরিটি চ্যানেল তৈরি
         createNotificationChannel()
 
-        // 3. Post notification & foreground service
+        // ৩. নোটিফিকেশন ও ফোরগ্রাউন্ড সার্ভিস রান
         showIncomingCallNotification(callerName, callId)
 
-        // 4. Start looping ringtone & vibration
+        // ৪. রিংটোন ও ভাইব্রেশন প্লে
         startRinging()
 
-        // 5. Directly launch MainActivity over lock screen & normal screen
+        // ৫. ফুল-স্ক্রিনে অ্যাক্টিভিটি লঞ্চ করার চেষ্টা (Overlay বা Unlocked থাকলে)
         launchCallActivity(callerName, callId, isAnswer = false)
 
-        // 6. Timeout after 45 seconds if nobody answers
+        // ৬. ৪৫ সেকেন্ড পর অটোমেটিক বন্ধ
         handler.removeCallbacks(timeoutRunnable)
         handler.postDelayed(timeoutRunnable, RING_TIMEOUT_MS)
 
@@ -113,7 +116,7 @@ class CallService : Service() {
                 "deenora:incoming_call_wake"
             ).apply { acquire(45_000L) }
         } catch (e: Exception) {
-            Log.w(TAG, "WakeLock failed: ${e.message}")
+            Log.e(TAG, "WakeLock acquire failed: ${e.message}")
         }
     }
 
@@ -146,7 +149,7 @@ class CallService : Service() {
             }
             startActivity(activityIntent)
         } catch (e: Exception) {
-            Log.w(TAG, "Direct launch MainActivity failed: ${e.message}")
+            Log.w(TAG, "Direct launch MainActivity failed (expected on background): ${e.message}")
         }
     }
 
@@ -194,33 +197,44 @@ class CallService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            if (notificationManager?.getNotificationChannel(CHANNEL_ID) == null) {
-                val channel = NotificationChannel(
-                    CHANNEL_ID,
-                    "ইনকামিং কল (Incoming Calls)",
-                    NotificationManager.IMPORTANCE_HIGH
-                ).apply {
-                    description = "জরুরি ইনকামিং কল অ্যালার্ট"
-                    enableVibration(true)
-                    vibrationPattern = longArrayOf(0, 800, 500, 800, 500, 800)
-                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                    setBypassDnd(true)
-                    setSound(null, null) // Sound & vibration are looped directly by startRinging()
-                }
-                notificationManager?.createNotificationChannel(channel)
+            val notificationManager = getSystemService(NotificationManager::class.java) ?: return
+
+            // সাউন্ড ইউআরআই
+            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val audioAttributes = AudioAttributes.Builder()
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                .build()
+
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "ইনকামিং কল (Incoming Calls)",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "জরুরি ইনকামিং কল অ্যালার্ট"
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 800, 500, 800, 500, 800)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setBypassDnd(true)
+                // সাউন্ড সেট করা অতি জরুরি — সাউন্ড ছাড়া অ্যান্ড্রয়েড ব্যানার বা ফুল-স্ক্রিন ব্লক করে!
+                setSound(soundUri, audioAttributes)
             }
+            notificationManager.createNotificationChannel(channel)
         }
     }
 
     private fun showIncomingCallNotification(callerName: String, callId: String) {
         val piFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
-        // 1. Full-screen and tap intent
+        // ১. ফুল-স্ক্রিন ও ট্যাপ ইনটেন্ট (MainActivity ওপেন হবে)
         val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
             action = Intent.ACTION_MAIN
             addCategory(Intent.CATEGORY_LAUNCHER)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
             putExtra("caller_name", callerName)
             putExtra("call_id", callId)
             putExtra("type", "incoming_call")
@@ -228,13 +242,16 @@ class CallService : Service() {
             putExtra("CALL_ID", callId)
             putExtra("INCOMING_CALL", true)
         }
-        val fullScreenPendingIntent = PendingIntent.getActivity(this, 0, fullScreenIntent, piFlags)
+        val fullScreenPendingIntent = PendingIntent.getActivity(this, 100, fullScreenIntent, piFlags)
 
-        // 2. Answer intent (direct Activity intent to avoid Android 12+ trampoline block)
+        // ২. Answer ইনটেন্ট (সরাসরি কল রিসিভ)
         val answerIntent = Intent(this, MainActivity::class.java).apply {
             action = Intent.ACTION_MAIN
             addCategory(Intent.CATEGORY_LAUNCHER)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
             putExtra("caller_name", callerName)
             putExtra("call_id", callId)
             putExtra("type", "incoming_call")
@@ -244,30 +261,53 @@ class CallService : Service() {
             putExtra("INCOMING_CALL", true)
             putExtra("ACTION", "ANSWER")
         }
-        val answerPendingIntent = PendingIntent.getActivity(this, 1, answerIntent, piFlags)
+        val answerPendingIntent = PendingIntent.getActivity(this, 101, answerIntent, piFlags)
 
-        // 3. Decline intent (handled by CallService STOP_SERVICE)
+        // ৩. Decline ইনটেন্ট (কল কেটে দেওয়া)
         val declineIntent = Intent(this, CallService::class.java).apply {
             action = "STOP_SERVICE"
             putExtra("CALL_ID", callId)
         }
-        val declinePendingIntent = PendingIntent.getService(this, 2, declineIntent, piFlags)
+        val declinePendingIntent = PendingIntent.getService(this, 102, declineIntent, piFlags)
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+        // কল পার্সন বিল্ডার
+        val callerPerson = Person.Builder()
+            .setName(callerName)
+            .setImportant(true)
+            .build()
+
+        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
+            // সিস্টেম ড্রয়েবল ব্যবহার করা হলো যেন কোনো অ্যান্ড্রয়েড ভার্সনে ড্রপ না হয়
+            .setSmallIcon(android.R.drawable.sym_call_incoming)
             .setContentTitle("ইনকামিং ভয়েস কল")
             .setContentText("$callerName থেকে কল আসছে...")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setSound(soundUri)
+            .setVibrate(longArrayOf(0, 800, 500, 800, 500, 800))
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .setContentIntent(fullScreenPendingIntent)
             .setOngoing(true)
             .setAutoCancel(false)
             .setTimeoutAfter(RING_TIMEOUT_MS)
+            // আধুনিক অ্যান্ড্রয়েডের অফিশিয়াল CallStyle (WhatsApp/Meet-এর মতো ডিজাইন)
+            .setStyle(
+                NotificationCompat.CallStyle.forIncomingCall(
+                    callerPerson,
+                    declinePendingIntent,
+                    answerPendingIntent
+                )
+            )
             .addAction(android.R.drawable.ic_menu_call, "উত্তর দিন (Answer)", answerPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "কেটে দিন (Decline)", declinePendingIntent)
-            .build()
+
+        val notification = notificationBuilder.build()
+        // FLAG_INSISTENT দিলে অ্যান্ড্রয়েড নিজে থেকে রিংটোন রিপিট করে
+        notification.flags = notification.flags or Notification.FLAG_INSISTENT
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
@@ -275,7 +315,7 @@ class CallService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
 
-        // Explicit notify forces Heads-Up notification banner on normal screen
+        // এক্সপ্লিসিট নোটিফাই দিয়ে স্ক্রিনের উপরে Heads-Up ব্যানার নিশ্চিত করা
         try {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.notify(NOTIFICATION_ID, notification)
