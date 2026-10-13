@@ -8,28 +8,16 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-
-    <!-- Required for targetSdk 30+ to check for installed apps -->
-    <queries>
-        <intent>
-            <action android:name="android.intent.action.VIEW" />
-            <data android:scheme="https" />
-        </intent>
-        <intent>
-            <action android:name="android.intent.action.DIAL" />
-        </intent>
-        <package android:name="com.google.android.youtube" />
-        <package android:name="com.whatsapp" />
-    </queries>
 
     <application
         android:icon="@mipmap/ic_launcher"
@@ -60,12 +48,6 @@
             android:foregroundServiceType="phoneCall" />
 
         <service
-            android:name="com.kmibrahim.deenorav3.OngoingCallService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="microphone" />
-
-        <service
             android:name="com.kmibrahim.deenorav3.FcmService"
             android:exported="false">
             <intent-filter>
@@ -77,11 +59,7 @@
             android:name="com.kmibrahim.deenorav3.KeepAliveService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_TYPE"
-                android:value="keep_alive_for_fcm_call_notifications" />
-        </service>
+            android:foregroundServiceType="phoneCall" />
 
         <receiver
             android:name="com.kmibrahim.deenorav3.BootReceiver"
