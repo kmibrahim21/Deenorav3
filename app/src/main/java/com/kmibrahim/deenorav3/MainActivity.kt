@@ -66,7 +66,6 @@ class MainActivity : AppCompatActivity() {
 
         // FCM push token sync
         FcmService.syncToken(this)
-        KeepAliveService.start(this)
 
         setupLaunchers()
         setupWebView()
@@ -523,6 +522,19 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun stopRinging() {
             CallService.stop(this@MainActivity)
+        }
+
+        /** Web: call AndroidInterface.onIncomingCall(callerName, callId) when an incoming offer arrives.
+         *  Triggers the native incoming-call UI instantly (bypasses FCM delay). */
+        @JavascriptInterface
+        fun onIncomingCall(callerName: String, callId: String) {
+            runOnUiThread {
+                Log.d(TAG, "Web triggered incoming call: $callerName ($callId)")
+                CallService.stop(this@MainActivity) // Clear any stale call first
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    CallService.start(this@MainActivity, callerName, callId)
+                }, 300)
+            }
         }
 
         /** Web: call AndroidInterface.callStarted() when the voice call connects. */
