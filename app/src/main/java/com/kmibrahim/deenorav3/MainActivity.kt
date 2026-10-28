@@ -41,6 +41,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var multiPhotoPickerLauncher: ActivityResultLauncher<PickVisualMediaRequest>
     private lateinit var permissionLauncher: ActivityResultLauncher<Array<String>>
 
+    // Call active tracking (same-call reload guard)
+    private var isCallActive = false
+    // Call ringing tracking (v2 fix: ringing obosthay isCallActive=false thake)
+    private var isCallRinging = false
+
     companion object {
         private const val CHANNEL_ID = "deenora_downloads"
         private const val TAG = "DeenoraV3"
@@ -85,7 +90,7 @@ class MainActivity : AppCompatActivity() {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(onDownloadComplete, filter)
         }
-        
+
         CookieManager.getInstance().flush()
     }
 
@@ -111,7 +116,7 @@ class MainActivity : AppCompatActivity() {
 
         val callAction = intent.getStringExtra("call_action")
         val callId = intent.getStringExtra("call_id") ?: intent.getStringExtra("CALL_ID") ?: ""
-        
+
         if (callAction == "answer" && webView.url?.startsWith("https://deenora.app") == true) {
             webView.evaluateJavascript(
                 "if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('answer','$callId');",
@@ -119,7 +124,14 @@ class MainActivity : AppCompatActivity() {
             )
             return
         }
-        
+
+        // Guard v2: ringing BA active call cholakalin kono tap-e WebView reload kore call katbe na
+        // (ringing obosthay isCallActive=false thake, tai sudhu active guard jothesto chilo na)
+        if (isCallActive || isCallRinging) {
+            Log.d(TAG, "Call ringing/active, skipping reload")
+            return
+        }
+
         val url = buildStartUrl(intent)
         if (url != "https://deenora.app") {
             webView.loadUrl(url)
@@ -127,10 +139,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isAuthFlowUrl(url: String): Boolean {
-        return url.contains("firebaseapp.com") || 
-               url.contains("accounts.google.com") || 
-               url.contains("__/auth/") ||
-               url.contains("googleid.googleapis.com")
+        return url.contains("firebaseapp.com") ||
+                url.contains("accounts.google.com") ||
+                url.contains("__/auth/") ||
+                url.contains("googleid.googleapis.com")
     }
 
     private fun wakeAndUnlockScreen() {
@@ -242,7 +254,7 @@ class MainActivity : AppCompatActivity() {
             }
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url?.toString() ?: ""
-                
+
                 // Auth URLs MUST stay in the same WebView instance to keep state/session
                 if (isAuthFlowUrl(url)) {
                     return false
@@ -289,15 +301,15 @@ class MainActivity : AppCompatActivity() {
             allowContentAccess = true
             useWideViewPort = true
             loadWithOverviewMode = true
-            
+
             // Critical Fix: Disable multi-window to force Auth flows into the same frame/session
             setSupportMultipleWindows(false)
             javaScriptCanOpenWindowsAutomatically = true
-            
+
             mediaPlaybackRequiresUserGesture = false
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             cacheMode = WebSettings.LOAD_DEFAULT
-            
+
             // CLEAN Mobile UA: Standard Chrome Mobile version without "wv" or "Version/X" markers.
             // This bypasses Google's "Embedded" block while maintaining session integrity.
             userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.164 Mobile Safari/537.36"
@@ -424,13 +436,13 @@ class MainActivity : AppCompatActivity() {
         val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return true
         if (scheme != "http" && scheme != "https") return true
         val host = uri.host?.lowercase(Locale.ROOT) ?: return false
-        
+
         val trusted = listOf(
-            "deenora.app", 
-            "google.com", 
-            "firebaseapp.com", 
-            "googleid.googleapis.com", 
-            "gstatic.com", 
+            "deenora.app",
+            "google.com",
+            "firebaseapp.com",
+            "googleid.googleapis.com",
+            "gstatic.com",
             "googleusercontent.com",
             "firebase.com",
             "supabase.co"
@@ -515,11 +527,14 @@ class MainActivity : AppCompatActivity() {
     inner class WebAppInterface {
         @JavascriptInterface
         fun stopRinging() {
+            this@MainActivity.isCallRinging = false
             CallService.stop(this@MainActivity)
         }
 
         @JavascriptInterface
         fun onIncomingCall(callerName: String, callId: String) {
+            this@MainActivity.isCallActive = false
+            this@MainActivity.isCallRinging = true
             runOnUiThread {
                 Log.d(TAG, "Web triggered incoming call: $callerName ($callId)")
                 CallService.stop(this@MainActivity)
@@ -531,6 +546,8 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun callStarted() {
+            this@MainActivity.isCallActive = true
+            this@MainActivity.isCallRinging = false
             runOnUiThread {
                 CallService.stop(this@MainActivity)
                 val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -541,6 +558,8 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun callEnded() {
+            this@MainActivity.isCallActive = false
+            this@MainActivity.isCallRinging = false
             runOnUiThread {
                 OngoingCallService.stop(this@MainActivity)
                 val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
