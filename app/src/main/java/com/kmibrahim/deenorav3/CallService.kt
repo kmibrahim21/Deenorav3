@@ -129,7 +129,7 @@ class CallService : Service() {
 
     private fun launchCallActivity(callerName: String, callId: String, isAnswer: Boolean) {
         try {
-            val activityIntent = Intent(this, MainActivity::class.java).apply {
+            val activityIntent = Intent(this, CallActivity::class.java).apply {
                 action = Intent.ACTION_MAIN
                 addCategory(Intent.CATEGORY_LAUNCHER)
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -149,7 +149,7 @@ class CallService : Service() {
             }
             startActivity(activityIntent)
         } catch (e: Exception) {
-            Log.w(TAG, "Direct launch MainActivity failed (expected on background): ${e.message}")
+            Log.w(TAG, "Direct launch CallActivity failed (expected on background): ${e.message}")
         }
     }
 
@@ -228,7 +228,7 @@ class CallService : Service() {
         val piFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
         // ১. ফুল-স্ক্রিন ও ট্যাপ ইনটেন্ট (MainActivity ওপেন হবে)
-        val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
+        val fullScreenIntent = Intent(this, CallActivity::class.java).apply {
             action = Intent.ACTION_MAIN
             addCategory(Intent.CATEGORY_LAUNCHER)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or

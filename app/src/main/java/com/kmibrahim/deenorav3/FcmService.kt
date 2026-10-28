@@ -14,6 +14,7 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import java.net.HttpURLConnection
 import java.net.URL
+import org.json.JSONObject
 
 /**
  * Deenora push handler.
@@ -61,15 +62,29 @@ class FcmService : FirebaseMessagingService() {
                     Log.d(TAG, "Synced FCM token: $token")
                     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                         .edit().putString(KEY_TOKEN, token).apply()
-                    Thread { registerTokenWithServer(token) }.start()
+                    Thread { registerTokenWithServer(context, token) }.start()
                 } else {
                     Log.e(TAG, "FCM token fetch FAILED", task.exception)
                 }
             }
         }
 
-        private fun registerTokenWithServer(token: String) {
+        private fun registerTokenWithServer(context: Context, token: String) {
             try {
+                val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                val deviceId = prefs.getString("deenora_device_id", null)
+                val parentPhone = prefs.getString("parent_phone", null)
+                val parentStudentId = prefs.getString("parent_student_id", null)
+                val parentInstitutionId = prefs.getString("parent_institution_id", null)
+                val json = JSONObject().apply {
+                    put("token", token)
+                    put("platform", "android")
+                    put("app_id", "app.deenora")
+                    if (!deviceId.isNullOrBlank()) put("device_id", deviceId)
+                    if (!parentPhone.isNullOrBlank()) put("phone", parentPhone)
+                    if (!parentStudentId.isNullOrBlank()) put("student_id", parentStudentId)
+                    if (!parentInstitutionId.isNullOrBlank()) put("institution_id", parentInstitutionId)
+                }
                 val url = URL(TOKEN_REGISTER_URL)
                 val conn = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
@@ -78,7 +93,7 @@ class FcmService : FirebaseMessagingService() {
                     readTimeout = 10000
                     doOutput = true
                 }
-                val body = """{"token":"$token","platform":"android","app_id":"app.deenora"}"""
+                val body = json.toString()
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
                 val code = conn.responseCode
                 Log.d(TAG, "Token register HTTP $code")
@@ -94,7 +109,7 @@ class FcmService : FirebaseMessagingService() {
         Log.d(TAG, "New FCM token: $token")
         getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_TOKEN, token).apply()
-        Thread { registerTokenWithServer(token) }.start()
+        Thread { registerTokenWithServer(this, token) }.start()
     }
 
     override fun onMessageReceived(message: RemoteMessage) {

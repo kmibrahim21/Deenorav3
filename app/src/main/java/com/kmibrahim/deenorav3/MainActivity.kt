@@ -49,6 +49,16 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val CHANNEL_ID = "deenora_downloads"
         private const val TAG = "DeenoraV3"
+
+        fun getOrCreateDeviceId(context: Context): String {
+            val prefs = context.getSharedPreferences("deenora_push", Context.MODE_PRIVATE)
+            var devId = prefs.getString("deenora_device_id", null)
+            if (devId.isNullOrBlank()) {
+                devId = java.util.UUID.randomUUID().toString()
+                prefs.edit().putString("deenora_device_id", devId).apply()
+            }
+            return devId
+        }
     }
 
     private val onDownloadComplete = object : BroadcastReceiver() {
@@ -125,6 +135,15 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // Decline fast-path: answer fast-path er moto, reload chara web session e pathano
+        if (callAction == "decline" && webView.url?.startsWith("https://deenora.app") == true) {
+            webView.evaluateJavascript(
+                "if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('decline','$callId');",
+                null
+            )
+            return
+        }
+
         // Guard v2: ringing BA active call cholakalin kono tap-e WebView reload kore call katbe na
         // (ringing obosthay isCallActive=false thake, tai sudhu active guard jothesto chilo na)
         if (isCallActive || isCallRinging) {
@@ -172,7 +191,11 @@ class MainActivity : AppCompatActivity() {
             val params = StringBuilder("https://deenora.app?fcm_tap=1")
             if (!callId.isNullOrBlank()) params.append("&call_id=").append(Uri.encode(callId))
             if (!callerName.isNullOrBlank()) params.append("&caller_name=").append(Uri.encode(callerName))
-            if (extras.getString("call_action") == "answer") params.append("&answer=1")
+            if (extras.getString("call_action") == "answer") {
+                params.append("&answer=1")
+            } else if (extras.getString("call_action") == "decline") {
+                params.append("&answer=0")
+            }
             return params.toString()
         }
         return "https://deenora.app"
@@ -463,6 +486,8 @@ class MainActivity : AppCompatActivity() {
             val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
             am.mode = AudioManager.MODE_IN_COMMUNICATION
             am.isSpeakerphoneOn = true
+        } else if (intent?.getStringExtra("call_action") == "decline") {
+            CallService.stop(this)
         }
     }
 
@@ -570,6 +595,27 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun downloadFile(base64: String, name: String, mime: String) {
             saveBase64ToFile(base64, name, mime)
+        }
+
+        @JavascriptInterface
+        fun getDeviceId(): String {
+            return getOrCreateDeviceId(this@MainActivity)
+        }
+
+        @JavascriptInterface
+        fun savePushIdentity(phone: String?, studentId: String?, institutionId: String?) {
+            val prefs = getSharedPreferences("deenora_push", Context.MODE_PRIVATE)
+            val editor = prefs.edit()
+            if (!phone.isNullOrBlank()) {
+                editor.putString("parent_phone", phone)
+            }
+            if (!studentId.isNullOrBlank()) {
+                editor.putString("parent_student_id", studentId)
+            }
+            if (!institutionId.isNullOrBlank()) {
+                editor.putString("parent_institution_id", institutionId)
+            }
+            editor.apply()
         }
 
         @JavascriptInterface

@@ -42,6 +42,14 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name="com.kmibrahim.deenorav3.CallActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true" />
+
         <service
             android:name="com.kmibrahim.deenorav3.CallService"
             android:enabled="true"
