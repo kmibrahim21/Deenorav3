@@ -85,6 +85,8 @@ class MainActivity : AppCompatActivity() {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(onDownloadComplete, filter)
         }
+        
+        CookieManager.getInstance().flush()
     }
 
     override fun onDestroy() {
@@ -99,13 +101,38 @@ class MainActivity : AppCompatActivity() {
         setIntent(intent)
         wakeAndUnlockScreen()
         handleCallAction(intent)
+
+        // IMPORTANT: Prevent reload if already on an auth-related page to preserve sessionStorage/state
+        val currentUrl = webView.url ?: ""
+        if (isAuthFlowUrl(currentUrl)) {
+            Log.d(TAG, "Auth flow in progress, skipping reload to preserve sessionStorage")
+            return
+        }
+
+        val callAction = intent.getStringExtra("call_action")
+        val callId = intent.getStringExtra("call_id") ?: intent.getStringExtra("CALL_ID") ?: ""
+        
+        if (callAction == "answer" && webView.url?.startsWith("https://deenora.app") == true) {
+            webView.evaluateJavascript(
+                "if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('answer','$callId');",
+                null
+            )
+            return
+        }
+        
         val url = buildStartUrl(intent)
         if (url != "https://deenora.app") {
             webView.loadUrl(url)
         }
     }
 
-    /** Screen off / lock screen thakle display jagiye tola (incoming call er jonno) */
+    private fun isAuthFlowUrl(url: String): Boolean {
+        return url.contains("firebaseapp.com") || 
+               url.contains("accounts.google.com") || 
+               url.contains("__/auth/") ||
+               url.contains("googleid.googleapis.com")
+    }
+
     private fun wakeAndUnlockScreen() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
@@ -134,12 +161,6 @@ class MainActivity : AppCompatActivity() {
             if (!callId.isNullOrBlank()) params.append("&call_id=").append(Uri.encode(callId))
             if (!callerName.isNullOrBlank()) params.append("&caller_name=").append(Uri.encode(callerName))
             if (extras.getString("call_action") == "answer") params.append("&answer=1")
-            extras.getString("student_name")?.takeIf { it.isNotBlank() }?.let {
-                params.append("&student_name=").append(Uri.encode(it))
-            }
-            extras.getString("institution_id")?.takeIf { it.isNotBlank() }?.let {
-                params.append("&institution_id=").append(Uri.encode(it))
-            }
             return params.toString()
         }
         return "https://deenora.app"
@@ -181,7 +202,6 @@ class MainActivity : AppCompatActivity() {
 
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest?) {
-                // Only our own site may use the microphone (voice calls only)
                 val host = request?.origin?.host ?: ""
                 if (request != null && (host == "deenora.app" || host.endsWith(".deenora.app"))) {
                     val allowed = request.resources
@@ -193,35 +213,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // Fix for Google Sign-in: Handling popups
-            override fun onCreateWindow(
-                view: WebView?,
-                isDialog: Boolean,
-                isUserGesture: Boolean,
-                resultMsg: android.os.Message?
-            ): Boolean {
-                val newWebView = WebView(this@MainActivity)
-                applySettings(newWebView)
-                newWebView.webChromeClient = this
-
-                // Redirect popup navigation to the main WebView
-                newWebView.webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                        val url = request?.url?.toString()
-                        if (url != null) {
-                            webView.loadUrl(url)
-                            return true
-                        }
-                        return false
-                    }
-                }
-
-                val transport = resultMsg?.obj as? WebView.WebViewTransport
-                transport?.webView = newWebView
-                resultMsg?.sendToTarget()
-                return true
-            }
-
             override fun onShowFileChooser(
                 webView: WebView?,
                 filePathCallback: ValueCallback<Array<Uri>>?,
@@ -229,43 +220,34 @@ class MainActivity : AppCompatActivity() {
             ): Boolean {
                 this@MainActivity.filePathCallback?.onReceiveValue(null)
                 this@MainActivity.filePathCallback = filePathCallback
-
-                val acceptTypes = fileChooserParams?.acceptTypes ?: arrayOf()
-                val isMultiple = fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE
-                val onlyMedia = acceptTypes.isNotEmpty() && acceptTypes.all { it.contains("image") || it.contains("video") }
-
-                return try {
-                    if (onlyMedia) {
-                        val mediaType = when {
-                            acceptTypes.any { it.contains("image") } && acceptTypes.any { it.contains("video") } -> ActivityResultContracts.PickVisualMedia.ImageAndVideo
-                            acceptTypes.any { it.contains("image") } -> ActivityResultContracts.PickVisualMedia.ImageOnly
-                            else -> ActivityResultContracts.PickVisualMedia.VideoOnly
-                        }
-                        val request = PickVisualMediaRequest(mediaType)
-                        if (isMultiple) multiPhotoPickerLauncher.launch(request) else singlePhotoPickerLauncher.launch(request)
-                    } else {
-                        val intent = fileChooserParams?.createIntent()
-                        if (intent != null) filePickerLauncher.launch(intent) else throw Exception("Intent is null")
-                    }
-                    true
-                } catch (e: Exception) {
-                    this@MainActivity.filePathCallback?.onReceiveValue(null)
-                    this@MainActivity.filePathCallback = null
-                    false
-                }
+                val intent = fileChooserParams?.createIntent()
+                if (intent != null) filePickerLauncher.launch(intent)
+                return true
             }
         }
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                injectBlobHook(view)
+                // White Screen Fix: Avoid injecting script on Auth domains or handlers to prevent CSP violations
+                if (url != null && url.contains("deenora.app") && !url.contains("__/auth/")) {
+                    injectBlobHook(view)
+                }
             }
             override fun onPageFinished(view: WebView?, url: String?) {
-                injectBlobHook(view)
-                injectDownloadScripts(view)
+                if (url != null && url.contains("deenora.app") && !url.contains("__/auth/")) {
+                    injectBlobHook(view)
+                    injectDownloadScripts(view)
+                }
+                CookieManager.getInstance().flush()
             }
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url?.toString() ?: ""
+                
+                // Auth URLs MUST stay in the same WebView instance to keep state/session
+                if (isAuthFlowUrl(url)) {
+                    return false
+                }
+
                 if (url.lowercase(Locale.ROOT).contains(".pdf") && !url.startsWith("blob:") && !url.startsWith("data:")) {
                     handleDownload(url, webView.settings.userAgentString, null, "application/pdf")
                     return true
@@ -281,7 +263,6 @@ class MainActivity : AppCompatActivity() {
 
         webView.addJavascriptInterface(WebAppInterface(), "AndroidInterface")
 
-        // Native Google Sign-In bridge — phone er account picker khulbe (existing Gmail list soho)
         webView.addJavascriptInterface(
             GoogleSignInBridge(this) { idToken ->
                 runOnUiThread {
@@ -299,66 +280,31 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun handleExternalUrls(url: String, view: WebView?): Boolean {
-        if (url.contains("youtube.com") || url.contains("youtu.be") || url.startsWith("vnd.youtube:")) {
-            try {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                startActivity(intent)
-                return true
-            } catch (e: Exception) {
-                return false
-            }
-        }
-        if (url.startsWith("intent://")) {
-            try {
-                val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-                if (intent != null) {
-                    val info = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
-                    if (info != null) {
-                        startActivity(intent)
-                    } else {
-                        val fallbackUrl = intent.getStringExtra("browser_fallback_url")
-                        if (fallbackUrl != null) {
-                            view?.loadUrl(fallbackUrl)
-                        }
-                    }
-                    return true
-                }
-            } catch (e: Exception) { }
-            return true
-        }
-        if (url.contains("wa.me") || url.startsWith("whatsapp:") ||
-            url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("sms:")) {
-            try {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                startActivity(intent)
-                return true
-            } catch (e: Exception) {
-                return false
-            }
-        }
-        return false
-    }
-
     private fun applySettings(v: WebView) {
         v.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
+            databaseEnabled = true
             allowFileAccess = true
             allowContentAccess = true
-            databaseEnabled = true
             useWideViewPort = true
             loadWithOverviewMode = true
-            setSupportMultipleWindows(true) // Required for Google Sign-in popups
+            
+            // Critical Fix: Disable multi-window to force Auth flows into the same frame/session
+            setSupportMultipleWindows(false)
             javaScriptCanOpenWindowsAutomatically = true
+            
             mediaPlaybackRequiresUserGesture = false
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            // Modern Chrome User-Agent to ensure Google allows Sign-in
-            userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
+            cacheMode = WebSettings.LOAD_DEFAULT
+            
+            // CLEAN Mobile UA: Standard Chrome Mobile version without "wv" or "Version/X" markers.
+            // This bypasses Google's "Embedded" block while maintaining session integrity.
+            userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.164 Mobile Safari/537.36"
         }
-        CookieManager.getInstance().setAcceptThirdPartyCookies(v, true)
+        val cookieManager = CookieManager.getInstance()
+        cookieManager.setAcceptCookie(true)
+        cookieManager.setAcceptThirdPartyCookies(v, true)
     }
 
     private fun handleDownload(url: String, userAgent: String, contentDisposition: String?, mimeType: String?) {
@@ -366,14 +312,10 @@ class MainActivity : AppCompatActivity() {
             webView.evaluateJavascript("if(typeof window.triggerDownload === 'function') window.triggerDownload('$url', '');", null)
             return
         }
-        var effectiveMimeType = mimeType
-        if (effectiveMimeType.isNullOrEmpty()) {
-            effectiveMimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(MimeTypeMap.getFileExtensionFromUrl(url))
-        }
         try {
-            val fileName = URLUtil.guessFileName(url, contentDisposition, effectiveMimeType)
+            val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
             val request = DownloadManager.Request(Uri.parse(url)).apply {
-                setMimeType(effectiveMimeType)
+                setMimeType(mimeType)
                 addRequestHeader("User-Agent", userAgent)
                 CookieManager.getInstance().getCookie(url)?.let { addRequestHeader("cookie", it) }
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
@@ -392,7 +334,6 @@ class MainActivity : AppCompatActivity() {
             val dataPart = if (base64Data.contains(",")) base64Data.substringAfter(",") else base64Data
             val bytes = Base64.decode(dataPart.trim(), Base64.DEFAULT)
             var cleanFileName = fileName?.ifEmpty { "deenora_file_" + System.currentTimeMillis() } ?: ("file_" + System.currentTimeMillis())
-            cleanFileName = cleanFileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, cleanFileName)
@@ -481,10 +422,19 @@ class MainActivity : AppCompatActivity() {
     private fun isTrustedUrl(url: String): Boolean {
         val uri = Uri.parse(url)
         val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return true
-        if (scheme != "http" && scheme != "https") return true // blob:, data:, about: ...
+        if (scheme != "http" && scheme != "https") return true
         val host = uri.host?.lowercase(Locale.ROOT) ?: return false
-        // Add more domains here if login/payment redirects break
-        val trusted = listOf("deenora.app", "google.com", "firebaseapp.com", "googleapis.com", "supabase.co")
+        
+        val trusted = listOf(
+            "deenora.app", 
+            "google.com", 
+            "firebaseapp.com", 
+            "googleid.googleapis.com", 
+            "gstatic.com", 
+            "googleusercontent.com",
+            "firebase.com",
+            "supabase.co"
+        )
         return trusted.any { host == it || host.endsWith(".$it") }
     }
 
@@ -494,14 +444,16 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { }
     }
 
-    /** Answer tapped on the notification -> stop ringing (web page then connects the call). */
     private fun handleCallAction(intent: Intent?) {
         if (intent?.getStringExtra("call_action") == "answer") {
             CallService.stop(this)
+            OngoingCallService.start(this)
+            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            am.isSpeakerphoneOn = true
         }
     }
 
-    /** Android 14+: full-screen incoming call UI needs this to be allowed. Asked once. */
     private fun requestFullScreenIntentAccessIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val nm = getSystemService(NotificationManager::class.java)
@@ -517,27 +469,66 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun handleExternalUrls(url: String, view: WebView?): Boolean {
+        if (url.contains("youtube.com") || url.contains("youtu.be") || url.startsWith("vnd.youtube:")) {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                startActivity(intent)
+                return true
+            } catch (e: Exception) {
+                return false
+            }
+        }
+        if (url.startsWith("intent://")) {
+            try {
+                val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+                if (intent != null) {
+                    val info = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+                    if (info != null) {
+                        startActivity(intent)
+                    } else {
+                        val fallbackUrl = intent.getStringExtra("browser_fallback_url")
+                        if (fallbackUrl != null) {
+                            view?.loadUrl(fallbackUrl)
+                        }
+                    }
+                    return true
+                }
+            } catch (e: Exception) { }
+            return true
+        }
+        if (url.contains("wa.me") || url.startsWith("whatsapp:") ||
+            url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("sms:")) {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                startActivity(intent)
+                return true
+            } catch (e: Exception) {
+                return false
+            }
+        }
+        return false
+    }
+
     inner class WebAppInterface {
-        /** Web: call AndroidInterface.stopRinging() when user answers/declines inside the page. */
         @JavascriptInterface
         fun stopRinging() {
             CallService.stop(this@MainActivity)
         }
 
-        /** Web: call AndroidInterface.onIncomingCall(callerName, callId) when an incoming offer arrives.
-         *  Triggers the native incoming-call UI instantly (bypasses FCM delay). */
         @JavascriptInterface
         fun onIncomingCall(callerName: String, callId: String) {
             runOnUiThread {
                 Log.d(TAG, "Web triggered incoming call: $callerName ($callId)")
-                CallService.stop(this@MainActivity) // Clear any stale call first
+                CallService.stop(this@MainActivity)
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                     CallService.start(this@MainActivity, callerName, callId)
                 }, 300)
             }
         }
 
-        /** Web: call AndroidInterface.callStarted() when the voice call connects. */
         @JavascriptInterface
         fun callStarted() {
             runOnUiThread {
@@ -548,7 +539,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        /** Web: call AndroidInterface.callEnded() when the call finishes. */
         @JavascriptInterface
         fun callEnded() {
             runOnUiThread {
