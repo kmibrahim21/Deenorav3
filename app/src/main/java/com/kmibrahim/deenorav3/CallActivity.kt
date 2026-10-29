@@ -1,40 +1,161 @@
 package com.kmibrahim.deenorav3
 
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.app.KeyguardManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.Button
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.Space
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 
+/**
+ * Deenora native call screen — WhatsApp-style SINGLE UI.
+ * Ek activity te 2 ta state: INCOMING (ringing) -> CONNECTED (kotha cholche).
+ * Programmatic UI (kono XML layout nei). Navy/blue premium theme.
+ *
+ * Flow:
+ * - Answer: MainActivity ke background audio-engine hishebe chalu kore
+ *   (native_ui=true), CallActivity CONNECTED UI dekhay — kono web call UI ashe na.
+ * - Decline/End: MainActivity r maddhome JS signaling hoy (admin ke janano hoy),
+ *   tarpor CallActivity finish.
+ * - Notification tap / notification Answer button -> CallActivity tei ashe.
+ */
 class CallActivity : AppCompatActivity() {
 
-    private val handler = Handler(Looper.getMainLooper())
-    private val timeoutRunnable = Runnable {
-        finish()
+    companion object {
+        const val ACTION_CALL_DISMISSED = "com.kmibrahim.deenorav3.CALL_DISMISSED"
+        private const val INCOMING_TIMEOUT_MS = 45_000L
     }
 
-    private var callerName: String = ""
-    private var callId: String = ""
-    private lateinit var nameText: TextView
+    private enum class UiState { INCOMING, CONNECTED }
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var uiState = UiState.INCOMING
+
+    private var callerName = ""
+    private var callerPhone = ""
+    private var callerSubtitle = ""
+    private var callId = ""
+
+    private var callStartTime = 0L
+    private var isMuted = false
+    private var isSpeakerOn = true
+
+    private lateinit var root: LinearLayout
+    private var timerText: TextView? = null
+    private var muteWrap: FrameLayout? = null
+    private var speakerWrap: FrameLayout? = null
+    private var muteIconTv: TextView? = null
+    private var muteLabelTv: TextView? = null
+
+    private val incomingTimeout = Runnable { finishCallUi() }
+
+    private val timerTick = object : Runnable {
+        override fun run() {
+            val s = ((System.currentTimeMillis() - callStartTime) / 1000).toInt()
+            timerText?.text = String.format("%02d:%02d", s / 60, s % 60)
+            handler.postDelayed(this, 1000)
+        }
+    }
+
+    private val dismissReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context?, i: Intent?) {
+            finishCallUi()
+        }
+    }
+
+    // ---------------- lifecycle ----------------
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        applyLockScreenFlags()
+        readExtras(intent)
 
-        // Lock screen er upore full-screen dekhano nischit kora
+        val filter = IntentFilter(ACTION_CALL_DISMISSED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(dismissReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(dismissReceiver, filter)
+        }
+
+        root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            background = navyGradient()
+            val p = dp(28)
+            setPadding(p, dp(72), p, dp(40))
+        }
+        setContentView(root)
+
+        // Notification er Answer button theke sorasori ele
+        if (intent.getStringExtra("call_action") == "answer") {
+            onAnswerClicked()
+        } else {
+            showIncomingUi()
+            handler.postDelayed(incomingTimeout, INCOMING_TIMEOUT_MS)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        readExtras(intent)
+        if (intent.getStringExtra("call_action") == "answer" && uiState == UiState.INCOMING) {
+            onAnswerClicked()
+        }
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacks(incomingTimeout)
+        handler.removeCallbacks(timerTick)
+        try {
+            unregisterReceiver(dismissReceiver)
+        } catch (_: Exception) {
+        }
+        super.onDestroy()
+    }
+
+    // ---------------- extras / flags ----------------
+
+    private fun readExtras(intent: Intent) {
+        callerName = intent.getStringExtra("caller_name")
+            ?: intent.getStringExtra("CALLER_NAME")
+                    ?: "মাদরাসা এডমিন"
+        callerPhone = intent.getStringExtra("caller_phone")
+            ?: intent.getStringExtra("CALLER_PHONE")
+                    ?: ""
+        callerSubtitle = intent.getStringExtra("caller_subtitle") ?: ""
+        val id = intent.getStringExtra("call_id") ?: intent.getStringExtra("CALL_ID")
+        if (!id.isNullOrBlank()) callId = id
+    }
+
+    private fun applyLockScreenFlags() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -50,75 +171,180 @@ class CallActivity : AppCompatActivity() {
             )
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
 
-        callerName = intent.getStringExtra("caller_name")
-            ?: intent.getStringExtra("CALLER_NAME")
-                    ?: "মাদরাসা এডমিন"
-        callId = intent.getStringExtra("call_id")
-            ?: intent.getStringExtra("CALL_ID")
-                    ?: ""
+    // ---------------- actions ----------------
 
-        // Programmatic premium dark UI (kono XML layout file er upor nirvorota nei)
-        val rootLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setBackgroundColor(Color.parseColor("#0F172A"))
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            val pad = dpToPx(32)
-            setPadding(pad, dpToPx(64), pad, dpToPx(48))
+    private fun onAnswerClicked() {
+        if (uiState == UiState.CONNECTED) return
+        uiState = UiState.CONNECTED
+        handler.removeCallbacks(incomingTimeout)
+
+        // Ringtone bondho, ongoing-call service chalu
+        CallService.stop(this)
+        OngoingCallService.start(this)
+        try {
+            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            am.isSpeakerphoneOn = true
+            isSpeakerOn = true
+        } catch (_: Exception) {
         }
 
-        val statusText = TextView(this).apply {
-            text = "ইনকামিং ভয়েস কল"
-            setTextColor(Color.parseColor("#94A3B8"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            gravity = Gravity.CENTER
-        }
-        rootLayout.addView(statusText)
+        // WebView audio-engine background e chalu hobe — kono web UI dekhabe na
+        signalToWeb("answer")
 
-        nameText = TextView(this).apply {
-            text = callerName
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f)
+        showConnectedUi()
+        callStartTime = System.currentTimeMillis()
+        handler.post(timerTick)
+    }
+
+    private fun onDeclineClicked() {
+        endCallFromNative("decline")
+    }
+
+    private fun onEndClicked() {
+        endCallFromNative("end")
+    }
+
+    /**
+     * Guardian katle admin keo janate hobe — tai MainActivity r maddhome
+     * JS signaling (rejectCall/endCall -> Supabase broadcast) pathano hoy.
+     */
+    private fun endCallFromNative(action: String) {
+        signalToWeb(action)
+        try {
+            CallService.stop(this)
+            OngoingCallService.stop(this)
+            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.mode = AudioManager.MODE_NORMAL
+            am.isSpeakerphoneOn = false
+        } catch (_: Exception) {
+        }
+        finishCallUi()
+    }
+
+    /** MainActivity ke background engine hishebe signal pathano (UI dekhabe na). */
+    private fun signalToWeb(action: String) {
+        try {
+            val i = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("type", "incoming_call")
+                putExtra("call_action", action)
+                putExtra("native_ui", true)
+                putExtra("call_id", callId)
+                putExtra("caller_name", callerName)
+                putExtra("CALLER_NAME", callerName)
+                putExtra("CALL_ID", callId)
+            }
+            startActivity(i)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun toggleMute() {
+        isMuted = !isMuted
+        try {
+            val i = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("native_ui", true)
+                putExtra("audio_action", "mute_toggle")
+                putExtra("muted", isMuted)
+                putExtra("call_id", callId)
+            }
+            startActivity(i)
+        } catch (_: Exception) {
+        }
+        refreshToggleIcons()
+    }
+
+    private fun toggleSpeaker() {
+        isSpeakerOn = !isSpeakerOn
+        try {
+            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            am.isSpeakerphoneOn = isSpeakerOn
+        } catch (_: Exception) {
+        }
+        refreshToggleIcons()
+    }
+
+    private fun finishCallUi() {
+        handler.removeCallbacks(incomingTimeout)
+        handler.removeCallbacks(timerTick)
+        try {
+            finish()
+        } catch (_: Exception) {
+        }
+    }
+
+    // ---------------- INCOMING UI ----------------
+
+    private fun showIncomingUi() {
+        root.removeAllViews()
+        uiState = UiState.INCOMING
+
+        root.addView(smallLabel("Incoming Call").apply {
+            setPadding(0, 0, 0, dp(24))
+        })
+
+        // Icon tile + pulse ring
+        val tileFrame = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(140), dp(140)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
+        }
+        val pulse = View(this).apply {
+            layoutParams = FrameLayout.LayoutParams(dp(140), dp(140), Gravity.CENTER)
+            background = circleDrawable("#2E60A5FA")
+        }
+        val tile = TextView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(dp(104), dp(104), Gravity.CENTER)
+            background = roundedRect("#0DFFFFFF", 28f, "#1AFFFFFF")
+            text = callerName.trim().firstOrNull()?.uppercase() ?: "D"
+            setTextColor(Color.parseColor("#60A5FA"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 40f)
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
-            setPadding(0, dpToPx(8), 0, 0)
         }
-        rootLayout.addView(nameText)
+        tileFrame.addView(pulse)
+        tileFrame.addView(tile)
+        root.addView(tileFrame)
+        startPulse(pulse)
 
-        val avatarContainer = LinearLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dpToPx(130), dpToPx(130)).apply {
-                topMargin = dpToPx(56)
-                bottomMargin = dpToPx(40)
-            }
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#1E293B"))
-                setStroke(dpToPx(3), Color.parseColor("#334155"))
-            }
-        }
-        val avatarIcon = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dpToPx(64), dpToPx(64))
-            setImageResource(android.R.drawable.sym_call_incoming)
-            setColorFilter(Color.WHITE)
-        }
-        avatarContainer.addView(avatarIcon)
-        rootLayout.addView(avatarContainer)
-
-        val spacer = TextView(this).apply {
+        // Name + phone
+        root.addView(TextView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1.0f
-            )
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(24) }
+            text = callerName
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 30f)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+        })
+        if (callerPhone.isNotBlank()) {
+            root.addView(TextView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8) }
+                text = callerPhone
+                setTextColor(Color.parseColor("#60A5FA"))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                gravity = Gravity.CENTER
+            })
         }
-        rootLayout.addView(spacer)
 
-        val buttonRow = LinearLayout(this).apply {
+        root.addView(Space(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+            )
+        })
+
+        // Decline | Accept
+        val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(
@@ -126,110 +352,298 @@ class CallActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
+        row.addView(callButtonColumn("Decline", "#EF4444", 135f) { onDeclineClicked() })
+        row.addView(Space(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(56), dp(1))
+        })
+        row.addView(callButtonColumn("Accept", "#16A34A", 0f) { onAnswerClicked() })
+        root.addView(row)
+    }
 
-        val declineBtn = Button(this).apply {
-            text = "কেটে দিন\nDecline"
+    private fun callButtonColumn(
+        label: String,
+        bgColor: String,
+        iconRotation: Float,
+        onClick: () -> Unit
+    ): LinearLayout {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        val btn = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(72), dp(72)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
+            background = circleDrawable(bgColor)
+            setImageResource(android.R.drawable.ic_menu_call)
+            setColorFilter(Color.WHITE)
+            setPadding(dp(20), dp(20), dp(20), dp(20))
+            rotation = iconRotation
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+        }
+        val tv = TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(12) }
+            text = label
+            setTextColor(Color.parseColor("#B3FFFFFF"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+            gravity = Gravity.CENTER
+        }
+        col.addView(btn)
+        col.addView(tv)
+        return col
+    }
+
+    // ---------------- CONNECTED UI ----------------
+
+    private fun showConnectedUi() {
+        root.removeAllViews()
+
+        val initial = callerName.trim().firstOrNull()?.uppercase() ?: "D"
+        val avatar = TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(96), dp(96)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = dp(12)
+            }
+            background = circleGradientDrawable()
+            text = initial
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 34f)
             typeface = Typeface.DEFAULT_BOLD
-            isAllCaps = false
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dpToPx(28).toFloat()
-                setColor(Color.parseColor("#DC2626"))
-            }
-            val lp = LinearLayout.LayoutParams(0, dpToPx(58), 1.0f).apply {
-                marginEnd = dpToPx(16)
-            }
-            layoutParams = lp
-            setOnClickListener {
-                val actIntent = Intent(this@CallActivity, MainActivity::class.java).apply {
-                    action = Intent.ACTION_MAIN
-                    addCategory(Intent.CATEGORY_LAUNCHER)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                    putExtra("caller_name", callerName)
-                    putExtra("call_id", callId)
-                    putExtra("CALLER_NAME", callerName)
-                    putExtra("CALL_ID", callId)
-                    putExtra("type", "incoming_call")
-                    putExtra("call_action", "decline")
-                }
-                startActivity(actIntent)
-                finish()
-            }
+            gravity = Gravity.CENTER
+            elevation = dp(6).toFloat()
         }
-        buttonRow.addView(declineBtn)
+        root.addView(avatar)
 
-        val answerBtn = Button(this).apply {
-            text = "উত্তর দিন\nAnswer"
+        root.addView(TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(16) }
+            text = callerName
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            typeface = Typeface.DEFAULT_BOLD
-            isAllCaps = false
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dpToPx(28).toFloat()
-                setColor(Color.parseColor("#16A34A"))
-            }
-            val lp = LinearLayout.LayoutParams(0, dpToPx(58), 1.0f).apply {
-                marginStart = dpToPx(16)
-            }
-            layoutParams = lp
-            setOnClickListener {
-                val actIntent = Intent(this@CallActivity, MainActivity::class.java).apply {
-                    action = Intent.ACTION_MAIN
-                    addCategory(Intent.CATEGORY_LAUNCHER)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                    putExtra("caller_name", callerName)
-                    putExtra("call_id", callId)
-                    putExtra("CALLER_NAME", callerName)
-                    putExtra("CALL_ID", callId)
-                    putExtra("type", "incoming_call")
-                    putExtra("call_action", "answer")
-                    putExtra("ACTION", "ANSWER")
-                }
-                startActivity(actIntent)
-                finish()
-            }
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        })
+
+        if (callerSubtitle.isNotBlank()) {
+            root.addView(TextView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(4) }
+                text = callerSubtitle
+                setTextColor(Color.parseColor("#99FFFFFF"))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                gravity = Gravity.CENTER
+            })
         }
-        buttonRow.addView(answerBtn)
 
-        rootLayout.addView(buttonRow)
-        setContentView(rootLayout)
-
-        // 45 second por kono action na hole swayongkriyobhabe dismiss
-        handler.postDelayed(timeoutRunnable, 45_000L)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        // CallActivity already khola thakle 2nd call ele purono caller na dekhiye notun caller dekhao
-        callerName = intent.getStringExtra("caller_name")
-            ?: intent.getStringExtra("CALLER_NAME")
-                    ?: callerName
-        callId = intent.getStringExtra("call_id")
-            ?: intent.getStringExtra("CALL_ID")
-                    ?: callId
-        if (::nameText.isInitialized) {
-            nameText.text = callerName
+        // Timer pill
+        timerText = TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = dp(16)
+            }
+            background = roundedRect("#1AFFFFFF", 20f, "#1AFFFFFF")
+            setPadding(dp(18), dp(8), dp(18), dp(8))
+            text = "00:00"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            typeface = Typeface.MONOSPACE
+            gravity = Gravity.CENTER
         }
-        handler.removeCallbacks(timeoutRunnable)
-        handler.postDelayed(timeoutRunnable, 45_000L)
+        root.addView(timerText)
+
+        root.addView(Space(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+            )
+        })
+
+        // Mute | Keypad | Speaker
+        val grid = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        muteWrap = null
+        speakerWrap = null
+        val (mw, ml) = toggleColumn("Mute", "🎤") { toggleMute() }
+        muteWrap = mw
+        muteLabelTv = ml
+        muteIconTv = mw.getChildAt(0) as TextView
+        grid.addView(wrapColumn(mw, ml))
+        grid.addView(Space(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(1))
+        })
+        val (kw, kl) = toggleColumn("Keypad", "🔢") {
+            Toast.makeText(this, "শীঘ্রই আসছে", Toast.LENGTH_SHORT).show()
+        }
+        grid.addView(wrapColumn(kw, kl))
+        grid.addView(Space(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(1))
+        })
+        val (sw, sl) = toggleColumn("Speaker", "🔊") { toggleSpeaker() }
+        speakerWrap = sw
+        grid.addView(wrapColumn(sw, sl))
+        root.addView(grid)
+        refreshToggleIcons()
+
+        // End button
+        val endBtn = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(80), dp(80)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = dp(36)
+            }
+            background = circleDrawable("#EF4444")
+            setImageResource(android.R.drawable.ic_menu_call)
+            setColorFilter(Color.WHITE)
+            setPadding(dp(22), dp(22), dp(22), dp(22))
+            rotation = 135f
+            elevation = dp(8).toFloat()
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onEndClicked() }
+        }
+        root.addView(endBtn)
     }
 
-    private fun dpToPx(dp: Int): Int {
-        return (dp * resources.displayMetrics.density).toInt()
+    /**
+     * Ekta toggle item banay: [circle wrap + icon] — return kore Pair(wrap, label).
+     * wrapColumn() diye etake vertical column e sajano hoy.
+     */
+    private fun toggleColumn(label: String, icon: String, onClick: () -> Unit): Pair<FrameLayout, TextView> {
+        val wrap = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(56), dp(56)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
+            background = circleDrawable("#33FFFFFF")
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+        }
+        val iconTv = TextView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            text = icon
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
+            gravity = Gravity.CENTER
+        }
+        wrap.addView(iconTv)
+        val tv = TextView(this).apply {
+            text = label
+            setTextColor(Color.parseColor("#B3FFFFFF"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            gravity = Gravity.CENTER
+        }
+        return Pair(wrap, tv)
     }
 
-    override fun onDestroy() {
-        handler.removeCallbacks(timeoutRunnable)
-        super.onDestroy()
+    private fun wrapColumn(wrap: FrameLayout, label: TextView): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            addView(wrap)
+            label.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
+            addView(label)
+        }
+    }
+
+    private fun refreshToggleIcons() {
+        muteWrap?.background = circleDrawable(if (isMuted) "#FFFFFF" else "#33FFFFFF")
+        speakerWrap?.background = circleDrawable(if (isSpeakerOn) "#FFFFFF" else "#33FFFFFF")
+        muteLabelTv?.text = if (isMuted) "Unmute" else "Mute"
+        muteIconTv?.text = if (isMuted) "🔇" else "🎤"
+    }
+
+    // ---------------- helpers ----------------
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    private fun navyGradient(): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(
+                Color.parseColor("#071B36"),
+                Color.parseColor("#0A2347"),
+                Color.parseColor("#071B36")
+            )
+        )
+    }
+
+    private fun circleDrawable(color: String): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor(color))
+        }
+    }
+
+    private fun circleGradientDrawable(): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(Color.parseColor("#3B82F6"), Color.parseColor("#1D4ED8"))
+        ).apply { shape = GradientDrawable.OVAL }
+    }
+
+    private fun roundedRect(color: String, radiusDp: Float, strokeColor: String?): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(radiusDp.toInt()).toFloat()
+            setColor(Color.parseColor(color))
+            if (strokeColor != null) setStroke(dp(1), Color.parseColor(strokeColor))
+        }
+    }
+
+    private fun smallLabel(text: String): TextView {
+        return TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            this.text = text.uppercase()
+            setTextColor(Color.parseColor("#99FFFFFF"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setLetterSpacing(0.18f)
+            gravity = Gravity.CENTER
+        }
+    }
+
+    private fun startPulse(view: View) {
+        val interp = AccelerateDecelerateInterpolator()
+        ObjectAnimator.ofFloat(view, "scaleX", 1f, 1.3f).apply {
+            duration = 1800
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = interp
+            start()
+        }
+        ObjectAnimator.ofFloat(view, "scaleY", 1f, 1.3f).apply {
+            duration = 1800
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = interp
+            start()
+        }
+        ObjectAnimator.ofFloat(view, "alpha", 0.5f, 0f).apply {
+            duration = 1800
+            repeatCount = ValueAnimator.INFINITE
+            start()
+        }
     }
 }

@@ -45,6 +45,9 @@ class MainActivity : AppCompatActivity() {
     private var isCallActive = false
     // Call ringing tracking (v2 fix: ringing obosthay isCallActive=false thake)
     private var isCallRinging = false
+    // Native call UI mode: CallActivity jokhon call screen dekhay, tokhon
+    // MainActivity sudhu background audio-engine — kono web call UI dekhabe na.
+    private var nativeCallUi = false
 
     companion object {
         private const val CHANNEL_ID = "deenora_downloads"
@@ -76,6 +79,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         wakeAndUnlockScreen()
 
+        nativeCallUi = intent.getBooleanExtra("native_ui", false)
+
         webView = WebView(this)
         setContentView(webView)
 
@@ -102,6 +107,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         CookieManager.getInstance().flush()
+
+        // Native call UI mode: CallActivity screen e thakbe, MainActivity
+        // sudhu background audio-engine — nijeke background e pathano.
+        // (CallActivity alada taskAffinity te thakay ete call UI lukay na.)
+        if (nativeCallUi) {
+            moveTaskToBack(true)
+        }
     }
 
     override fun onDestroy() {
@@ -115,6 +127,10 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         wakeAndUnlockScreen()
+
+        val isNativeUi = intent.getBooleanExtra("native_ui", false)
+        if (isNativeUi) nativeCallUi = true else nativeCallUi = false
+
         handleCallAction(intent)
 
         // IMPORTANT: Prevent reload if already on an auth-related page to preserve sessionStorage/state
@@ -125,22 +141,45 @@ class MainActivity : AppCompatActivity() {
         }
 
         val callAction = intent.getStringExtra("call_action")
+        val audioAction = intent.getStringExtra("audio_action")
         val callId = intent.getStringExtra("call_id") ?: intent.getStringExtra("CALL_ID") ?: ""
+        val onDeenora = webView.url?.startsWith("https://deenora.app") == true
 
-        if (callAction == "answer" && webView.url?.startsWith("https://deenora.app") == true) {
+        // Native UI theke Mute toggle — WebView reload chara JS e pathano
+        if (audioAction == "mute_toggle" && onDeenora) {
             webView.evaluateJavascript(
-                "if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('answer','$callId');",
+                "window.__nativeCallUi=true;if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('mute_toggle','$callId');",
                 null
             )
             return
         }
 
-        // Decline fast-path: answer fast-path er moto, reload chara web session e pathano
-        if (callAction == "decline" && webView.url?.startsWith("https://deenora.app") == true) {
+        if (callAction == "answer" && onDeenora) {
             webView.evaluateJavascript(
-                "if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('decline','$callId');",
+                "window.__nativeCallUi=true;if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('answer','$callId');",
                 null
             )
+            if (isNativeUi) moveTaskToBack(true)
+            return
+        }
+
+        // Decline fast-path: answer fast-path er moto, reload chara web session e pathano
+        if (callAction == "decline" && onDeenora) {
+            webView.evaluateJavascript(
+                "window.__nativeCallUi=true;if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('decline','$callId');",
+                null
+            )
+            if (isNativeUi) moveTaskToBack(true)
+            return
+        }
+
+        // End fast-path (connected obosthay guardian katle): admin ke janano
+        if (callAction == "end" && onDeenora) {
+            webView.evaluateJavascript(
+                "window.__nativeCallUi=true;if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('end','$callId');",
+                null
+            )
+            if (isNativeUi) moveTaskToBack(true)
             return
         }
 
@@ -148,6 +187,7 @@ class MainActivity : AppCompatActivity() {
         // (ringing obosthay isCallActive=false thake, tai sudhu active guard jothesto chilo na)
         if (isCallActive || isCallRinging) {
             Log.d(TAG, "Call ringing/active, skipping reload")
+            if (isNativeUi) moveTaskToBack(true)
             return
         }
 
@@ -155,6 +195,7 @@ class MainActivity : AppCompatActivity() {
         if (url != "https://deenora.app") {
             webView.loadUrl(url)
         }
+        if (isNativeUi) moveTaskToBack(true)
     }
 
     private fun isAuthFlowUrl(url: String): Boolean {
@@ -195,6 +236,12 @@ class MainActivity : AppCompatActivity() {
                 params.append("&answer=1")
             } else if (extras.getString("call_action") == "decline") {
                 params.append("&answer=0")
+            } else if (extras.getString("call_action") == "end") {
+                params.append("&answer=0")
+            }
+            // Native call UI mode — web jeno kono call modal na dekhay
+            if (extras.getBoolean("native_ui", false)) {
+                params.append("&native_ui=1")
             }
             return params.toString()
         }
@@ -272,6 +319,10 @@ class MainActivity : AppCompatActivity() {
                 if (url != null && url.contains("deenora.app") && !url.contains("__/auth/")) {
                     injectBlobHook(view)
                     injectDownloadScripts(view)
+                    // Native call UI mode — web jeno call modal na dekhay
+                    if (nativeCallUi) {
+                        view?.evaluateJavascript("window.__nativeCallUi=true;", null)
+                    }
                 }
                 CookieManager.getInstance().flush()
             }
@@ -488,6 +539,17 @@ class MainActivity : AppCompatActivity() {
             am.isSpeakerphoneOn = true
         } else if (intent?.getStringExtra("call_action") == "decline") {
             CallService.stop(this)
+            // Decline hole ongoing service o bondho (age miss chilo)
+            OngoingCallService.stop(this)
+            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.mode = AudioManager.MODE_NORMAL
+            am.isSpeakerphoneOn = false
+        } else if (intent?.getStringExtra("call_action") == "end") {
+            CallService.stop(this)
+            OngoingCallService.stop(this)
+            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.mode = AudioManager.MODE_NORMAL
+            am.isSpeakerphoneOn = false
         }
     }
 
@@ -589,6 +651,12 @@ class MainActivity : AppCompatActivity() {
                 OngoingCallService.stop(this@MainActivity)
                 val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 am.mode = AudioManager.MODE_NORMAL
+                // Admin katle native call screen o bondho hobe
+                try {
+                    sendBroadcast(
+                        Intent(CallActivity.ACTION_CALL_DISMISSED).setPackage(packageName)
+                    )
+                } catch (_: Exception) {}
             }
         }
 
@@ -621,6 +689,12 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun getFcmToken(): String {
             return getSharedPreferences("deenora_push", Context.MODE_PRIVATE).getString("fcm_token", "") ?: ""
+        }
+
+        /** Web jante parbe native call UI active kina (parent app e web modal lukabe). */
+        @JavascriptInterface
+        fun isNativeCallUi(): Boolean {
+            return this@MainActivity.nativeCallUi
         }
     }
 }

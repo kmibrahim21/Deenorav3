@@ -68,6 +68,28 @@ class CallService : Service() {
         Log.d(TAG, "onStartCommand action: $action")
 
         if (action == "STOP_SERVICE" || action == "DECLINE_CALL") {
+            // Notification theke Decline: admin keo janate hobe (signaling),
+            // tai MainActivity r maddhome JS reject pathano hoy.
+            if (action == "DECLINE_CALL") {
+                try {
+                    val declineCallId = intent?.getStringExtra("CALL_ID") ?: ""
+                    val signalIntent = Intent(this, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        putExtra("type", "incoming_call")
+                        putExtra("call_action", "decline")
+                        putExtra("native_ui", true)
+                        putExtra("call_id", declineCallId)
+                        putExtra("CALL_ID", declineCallId)
+                    }
+                    startActivity(signalIntent)
+                } catch (_: Exception) {}
+                // CallActivity khola thakle setao bondho hobe
+                try {
+                    sendBroadcast(
+                        Intent(CallActivity.ACTION_CALL_DISMISSED).setPackage(packageName)
+                    )
+                } catch (_: Exception) {}
+            }
             removeNotification()
             stopSelf()
             return START_NOT_STICKY
@@ -227,7 +249,7 @@ class CallService : Service() {
     private fun showIncomingCallNotification(callerName: String, callId: String) {
         val piFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
-        // ১. ফুল-স্ক্রিন ও ট্যাপ ইনটেন্ট (MainActivity ওপেন হবে)
+        // ১. ফুল-স্ক্রিন ও ট্যাপ ইনটেন্ট (CallActivity ওপেন হবে — ektai native UI)
         val fullScreenIntent = Intent(this, CallActivity::class.java).apply {
             action = Intent.ACTION_MAIN
             addCategory(Intent.CATEGORY_LAUNCHER)
@@ -244,8 +266,10 @@ class CallService : Service() {
         }
         val fullScreenPendingIntent = PendingIntent.getActivity(this, 100, fullScreenIntent, piFlags)
 
-        // ২. Answer ইনটেন্ট (সরাসরি কল রিসিভ)
-        val answerIntent = Intent(this, MainActivity::class.java).apply {
+        // ২. Answer ইনটেন্ট — CallActivity te jabe (native UI), MainActivity te NA.
+        // CallActivity Answer chaple MainActivity ke background engine hishebe
+        // chalu korbe (native_ui=true) — kono web call UI dekhabe na.
+        val answerIntent = Intent(this, CallActivity::class.java).apply {
             action = Intent.ACTION_MAIN
             addCategory(Intent.CATEGORY_LAUNCHER)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or

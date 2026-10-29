@@ -46,12 +46,15 @@
             </intent-filter>
         </activity>
 
+        <!-- taskAffinity alada: native_ui mode e MainActivity moveTaskToBack korle
+             jeno CallActivity r task background e na jay (single native UI thake). -->
         <activity
             android:name="com.kmibrahim.deenorav3.CallActivity"
             android:exported="false"
             android:launchMode="singleTop"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
+            android:taskAffinity="com.kmibrahim.deenorav3.callui"
             android:excludeFromRecents="true" />
 
         <service
