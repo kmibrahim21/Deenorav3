@@ -74,7 +74,9 @@ class CallService : Service() {
                 try {
                     val declineCallId = intent?.getStringExtra("CALL_ID") ?: ""
                     val signalIntent = Intent(this, MainActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        // NOTE: onStartCommand er 'flags' param er sathe nam milay
+                        // 'flags = ...' dile compile error hoy — tai addFlags().
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                         putExtra("type", "incoming_call")
                         putExtra("call_action", "decline")
                         putExtra("native_ui", true)
