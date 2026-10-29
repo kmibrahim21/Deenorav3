@@ -31,13 +31,14 @@ import androidx.appcompat.app.AppCompatActivity
 
 /**
  * Deenora native call screen — WhatsApp-style SINGLE UI.
+ * Design: Deenora_UI_Prototype (navy/blue premium) — web + app ektai design.
  * Ek activity te 2 ta state: INCOMING (ringing) -> CONNECTED (kotha cholche).
- * Programmatic UI (kono XML layout nei). Navy/blue premium theme.
+ * Programmatic UI (kono XML layout nei).
  *
  * Flow:
  * - Answer: MainActivity ke background audio-engine hishebe chalu kore
  *   (native_ui=true), CallActivity CONNECTED UI dekhay — kono web call UI ashe na.
- * - Decline/End: MainActivity r maddhome JS signaling hoy (admin ke janano hoy),
+ * - Decline/End: MainActivity r maddhome JS signaling (admin ke janano hoy),
  *   tarpor CallActivity finish.
  * - Notification tap / notification Answer button -> CallActivity tei ashe.
  */
@@ -66,7 +67,8 @@ class CallActivity : AppCompatActivity() {
     private var timerText: TextView? = null
     private var muteWrap: FrameLayout? = null
     private var speakerWrap: FrameLayout? = null
-    private var muteIconTv: TextView? = null
+    private var muteIcon: ImageView? = null
+    private var speakerIcon: ImageView? = null
     private var muteLabelTv: TextView? = null
 
     private val incomingTimeout = Runnable { finishCallUi() }
@@ -278,17 +280,17 @@ class CallActivity : AppCompatActivity() {
         }
     }
 
-    // ---------------- INCOMING UI ----------------
+    // ---------------- INCOMING UI (prototype: Parent Incoming) ----------------
 
     private fun showIncomingUi() {
         root.removeAllViews()
         uiState = UiState.INCOMING
 
         root.addView(smallLabel("Incoming Call").apply {
-            setPadding(0, 0, 0, dp(24))
+            setPadding(0, 0, 0, dp(40))
         })
 
-        // Icon tile + pulse ring
+        // Institution icon tile + pulse ring
         val tileFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(dp(140), dp(140)).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
@@ -298,38 +300,40 @@ class CallActivity : AppCompatActivity() {
             layoutParams = FrameLayout.LayoutParams(dp(140), dp(140), Gravity.CENTER)
             background = circleDrawable("#2E60A5FA")
         }
-        val tile = TextView(this).apply {
+        val tile = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(dp(104), dp(104), Gravity.CENTER)
             background = roundedRect("#0DFFFFFF", 28f, "#1AFFFFFF")
-            text = callerName.trim().firstOrNull()?.uppercase() ?: "D"
-            setTextColor(Color.parseColor("#60A5FA"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 40f)
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
         }
+        val schoolIcon = ImageView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER)
+            setImageResource(R.drawable.ic_school)
+            setColorFilter(Color.parseColor("#60A5FA"))
+        }
+        tile.addView(schoolIcon)
         tileFrame.addView(pulse)
         tileFrame.addView(tile)
         root.addView(tileFrame)
         startPulse(pulse)
 
-        // Name + phone
+        // Institution name
         root.addView(TextView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(24) }
+            ).apply { topMargin = dp(32) }
             text = callerName
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 30f)
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
         })
+        // Phone
         if (callerPhone.isNotBlank()) {
             root.addView(TextView(this).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(8) }
+                ).apply { topMargin = dp(10) }
                 text = callerPhone
                 setTextColor(Color.parseColor("#60A5FA"))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
@@ -352,17 +356,18 @@ class CallActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-        row.addView(callButtonColumn("Decline", "#EF4444", 135f) { onDeclineClicked() })
+        row.addView(callButtonColumn("Decline", "#EF4444", R.drawable.ic_call, 135f) { onDeclineClicked() })
         row.addView(Space(this).apply {
             layoutParams = LinearLayout.LayoutParams(dp(56), dp(1))
         })
-        row.addView(callButtonColumn("Accept", "#16A34A", 0f) { onAnswerClicked() })
+        row.addView(callButtonColumn("Accept", "#16A34A", R.drawable.ic_call, 0f) { onAnswerClicked() })
         root.addView(row)
     }
 
     private fun callButtonColumn(
         label: String,
         bgColor: String,
+        iconRes: Int,
         iconRotation: Float,
         onClick: () -> Unit
     ): LinearLayout {
@@ -375,10 +380,11 @@ class CallActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER_HORIZONTAL
             }
             background = circleDrawable(bgColor)
-            setImageResource(android.R.drawable.ic_menu_call)
+            setImageResource(iconRes)
             setColorFilter(Color.WHITE)
             setPadding(dp(20), dp(20), dp(20), dp(20))
             rotation = iconRotation
+            elevation = dp(6).toFloat()
             isClickable = true
             isFocusable = true
             setOnClickListener { onClick() }
@@ -391,7 +397,6 @@ class CallActivity : AppCompatActivity() {
             text = label
             setTextColor(Color.parseColor("#B3FFFFFF"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
             gravity = Gravity.CENTER
         }
         col.addView(btn)
@@ -399,7 +404,7 @@ class CallActivity : AppCompatActivity() {
         return col
     }
 
-    // ---------------- CONNECTED UI ----------------
+    // ---------------- CONNECTED UI (prototype: Connected Call) ----------------
 
     private fun showConnectedUi() {
         root.removeAllViews()
@@ -481,23 +486,21 @@ class CallActivity : AppCompatActivity() {
         }
         muteWrap = null
         speakerWrap = null
-        val (mw, ml) = toggleColumn("Mute", "🎤") { toggleMute() }
-        muteWrap = mw
-        muteLabelTv = ml
-        muteIconTv = mw.getChildAt(0) as TextView
+        val (mw, mi, ml) = toggleItem(R.drawable.ic_mic, "Mute") { toggleMute() }
+        muteWrap = mw; muteIcon = mi; muteLabelTv = ml
         grid.addView(wrapColumn(mw, ml))
         grid.addView(Space(this).apply {
             layoutParams = LinearLayout.LayoutParams(dp(28), dp(1))
         })
-        val (kw, kl) = toggleColumn("Keypad", "🔢") {
+        val (kw, _, kl) = toggleItem(R.drawable.ic_dialpad, "Keypad") {
             Toast.makeText(this, "শীঘ্রই আসছে", Toast.LENGTH_SHORT).show()
         }
         grid.addView(wrapColumn(kw, kl))
         grid.addView(Space(this).apply {
             layoutParams = LinearLayout.LayoutParams(dp(28), dp(1))
         })
-        val (sw, sl) = toggleColumn("Speaker", "🔊") { toggleSpeaker() }
-        speakerWrap = sw
+        val (sw, si, sl) = toggleItem(R.drawable.ic_volume_up, "Speaker") { toggleSpeaker() }
+        speakerWrap = sw; speakerIcon = si
         grid.addView(wrapColumn(sw, sl))
         root.addView(grid)
         refreshToggleIcons()
@@ -509,7 +512,7 @@ class CallActivity : AppCompatActivity() {
                 topMargin = dp(36)
             }
             background = circleDrawable("#EF4444")
-            setImageResource(android.R.drawable.ic_menu_call)
+            setImageResource(R.drawable.ic_call)
             setColorFilter(Color.WHITE)
             setPadding(dp(22), dp(22), dp(22), dp(22))
             rotation = 135f
@@ -522,10 +525,14 @@ class CallActivity : AppCompatActivity() {
     }
 
     /**
-     * Ekta toggle item banay: [circle wrap + icon] — return kore Pair(wrap, label).
-     * wrapColumn() diye etake vertical column e sajano hoy.
+     * Ekta toggle item: [56dp circle wrap + vector icon] + label.
+     * Return: Triple(wrap, iconView, labelView).
      */
-    private fun toggleColumn(label: String, icon: String, onClick: () -> Unit): Pair<FrameLayout, TextView> {
+    private fun toggleItem(
+        iconRes: Int,
+        label: String,
+        onClick: () -> Unit
+    ): Triple<FrameLayout, ImageView, TextView> {
         val wrap = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(dp(56), dp(56)).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
@@ -535,23 +542,19 @@ class CallActivity : AppCompatActivity() {
             isFocusable = true
             setOnClickListener { onClick() }
         }
-        val iconTv = TextView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            text = icon
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
-            gravity = Gravity.CENTER
+        val icon = ImageView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(dp(26), dp(26), Gravity.CENTER)
+            setImageResource(iconRes)
+            setColorFilter(Color.WHITE)
         }
-        wrap.addView(iconTv)
+        wrap.addView(icon)
         val tv = TextView(this).apply {
             text = label
             setTextColor(Color.parseColor("#B3FFFFFF"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             gravity = Gravity.CENTER
         }
-        return Pair(wrap, tv)
+        return Triple(wrap, icon, tv)
     }
 
     private fun wrapColumn(wrap: FrameLayout, label: TextView): LinearLayout {
@@ -567,11 +570,13 @@ class CallActivity : AppCompatActivity() {
         }
     }
 
+    /** Prototype style: active (on) hole shada circle + dark icon. */
     private fun refreshToggleIcons() {
         muteWrap?.background = circleDrawable(if (isMuted) "#FFFFFF" else "#33FFFFFF")
-        speakerWrap?.background = circleDrawable(if (isSpeakerOn) "#FFFFFF" else "#33FFFFFF")
+        muteIcon?.setColorFilter(Color.parseColor(if (isMuted) "#10233F" else "#FFFFFF"))
         muteLabelTv?.text = if (isMuted) "Unmute" else "Mute"
-        muteIconTv?.text = if (isMuted) "🔇" else "🎤"
+        speakerWrap?.background = circleDrawable(if (isSpeakerOn) "#FFFFFF" else "#33FFFFFF")
+        speakerIcon?.setColorFilter(Color.parseColor(if (isSpeakerOn) "#10233F" else "#FFFFFF"))
     }
 
     // ---------------- helpers ----------------
