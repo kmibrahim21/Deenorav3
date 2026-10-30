@@ -380,7 +380,6 @@ class CallService : Service() {
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setVibrate(longArrayOf(0, 800, 500, 800, 500, 800))
-                .setFullScreenIntent(fullScreenPendingIntent, true)
                 .setContentIntent(fullScreenPendingIntent)
                 .setCustomContentView(cardView)
                 .setCustomBigContentView(cardView)
