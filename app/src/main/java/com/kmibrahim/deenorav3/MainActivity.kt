@@ -49,6 +49,45 @@ class MainActivity : AppCompatActivity() {
     // MainActivity sudhu background audio-engine — kono web call UI dekhabe na.
     private var nativeCallUi = false
 
+    private val callActionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.getStringExtra("call_action")
+            val audioAction = intent?.getStringExtra("audio_action")
+            val callId = intent?.getStringExtra("call_id") ?: ""
+            val onDeenora = webView.url?.contains("deenora.app") == true
+
+            if (!onDeenora) return
+
+            if (audioAction == "mute_toggle") {
+                webView.evaluateJavascript(
+                    "window.__nativeCallUi=true;if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('mute_toggle','$callId');",
+                    null
+                )
+                return
+            }
+
+            when (action) {
+                "answer" -> {
+                    webView.evaluateJavascript(
+                        "window.__nativeCallUi=true; " +
+                        "if(typeof window.handleNativeCallAction==='function') { " +
+                        "  console.log('Deenora: handleNativeCallAction executing answer'); " +
+                        "  window.handleNativeCallAction('answer','$callId'); " +
+                        "} else { console.log('Deenora: handleNativeCallAction NOT FOUND'); }",
+                        null
+                    )
+                }
+                "decline", "end" -> {
+                    webView.evaluateJavascript(
+                        "window.__nativeCallUi=true; " +
+                        "if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('$action','$callId');",
+                        null
+                    )
+                }
+            }
+        }
+    }
+
     companion object {
         private const val CHANNEL_ID = "deenora_downloads"
         private const val TAG = "DeenoraV3"
@@ -99,18 +138,21 @@ class MainActivity : AppCompatActivity() {
         handleCallAction(intent)
 
         val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+        val callFilter = IntentFilter("com.kmibrahim.deenorav3.WEB_CALL_ACTION")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(onDownloadComplete, filter, Context.RECEIVER_EXPORTED)
+            registerReceiver(callActionReceiver, callFilter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(onDownloadComplete, filter)
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(callActionReceiver, callFilter)
         }
 
         CookieManager.getInstance().flush()
 
         // Native call UI mode: CallActivity screen e thakbe, MainActivity
         // sudhu background audio-engine — nijeke background e pathano.
-        // (CallActivity alada taskAffinity te thakay ete call UI lukay na.)
         if (nativeCallUi) {
             moveTaskToBack(true)
         }
@@ -118,9 +160,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        try { cancelAnswerFallback() } catch (_: Exception) {}
         try {
             unregisterReceiver(onDownloadComplete)
+            unregisterReceiver(callActionReceiver)
         } catch (e: Exception) { }
     }
 
@@ -141,56 +183,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val callAction = intent.getStringExtra("call_action")
-        val audioAction = intent.getStringExtra("audio_action")
-        val callId = intent.getStringExtra("call_id") ?: intent.getStringExtra("CALL_ID") ?: ""
-        val onDeenora = webView.url?.startsWith("https://deenora.app") == true
-
-        // Native UI theke Mute toggle — WebView reload chara JS e pathano
-        if (audioAction == "mute_toggle" && onDeenora) {
-            webView.evaluateJavascript(
-                "window.__nativeCallUi=true;if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('mute_toggle','$callId');",
-                null
-            )
-            return
-        }
-
-        if (callAction == "answer" && onDeenora) {
-            webView.evaluateJavascript(
-                "window.__nativeCallUi=true;if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('answer','$callId');",
-                null
-            )
-            // getUserMedia backgrounded WebView-e hang korte pare — tai web
-            // callStarted() na bola porjonto MainActivity foreground-e thakbe.
-            // (Kalo porda: user dashboard-er flash dekhbe na.)
-            // Safety: 10s-e callStarted na eleo background-e chole jabe.
-            showNativeUiVeil()
-            scheduleAnswerFallback()
-            return
-        }
-
-        // Decline fast-path: answer fast-path er moto, reload chara web session e pathano
-        if (callAction == "decline" && onDeenora) {
-            webView.evaluateJavascript(
-                "window.__nativeCallUi=true;if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('decline','$callId');",
-                null
-            )
-            if (isNativeUi) moveTaskToBack(true)
-            return
-        }
-
-        // End fast-path (connected obosthay guardian katle): admin ke janano
-        if (callAction == "end" && onDeenora) {
-            webView.evaluateJavascript(
-                "window.__nativeCallUi=true;if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('end','$callId');",
-                null
-            )
-            if (isNativeUi) moveTaskToBack(true)
-            return
-        }
-
         // Guard v2: ringing BA active call cholakalin kono tap-e WebView reload kore call katbe na
-        // (ringing obosthay isCallActive=false thake, tai sudhu active guard jothesto chilo na)
         if (isCallActive || isCallRinging) {
             Log.d(TAG, "Call ringing/active, skipping reload")
             if (isNativeUi) moveTaskToBack(true)
@@ -211,48 +204,8 @@ class MainActivity : AppCompatActivity() {
                 url.contains("googleid.googleapis.com")
     }
 
-    // ---------- Native answer: WebView foreground-e rakhar helper ----------
-
-    private val answerHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private var answerFallback: Runnable? = null
-    private var nativeVeil: android.view.View? = null
-
-    /** Web callStarted() na bola porjonto 10s fallback: tokhon background-e jabe. */
-    private fun scheduleAnswerFallback() {
-        cancelAnswerFallback()
-        answerFallback = Runnable {
-            answerFallback = null
-            hideNativeUiVeil()
-            try { moveTaskToBack(true) } catch (_: Exception) {}
-        }
-        answerHandler.postDelayed(answerFallback!!, 10_000L)
-    }
-
-    private fun cancelAnswerFallback() {
-        answerFallback?.let { answerHandler.removeCallbacks(it) }
-        answerFallback = null
-    }
-
-    /** Kalo porda — answer-er somoy dashboard flash lukate. */
-    private fun showNativeUiVeil() {
-        runOnUiThread {
-            if (nativeVeil == null) {
-                nativeVeil = android.view.View(this).apply {
-                    setBackgroundColor(android.graphics.Color.BLACK)
-                    layoutParams = android.view.ViewGroup.LayoutParams(
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                }
-                (window.decorView as? android.view.ViewGroup)?.addView(nativeVeil)
-            }
-            nativeVeil?.visibility = android.view.View.VISIBLE
-        }
-    }
-
-    private fun hideNativeUiVeil() {
-        runOnUiThread { nativeVeil?.visibility = android.view.View.GONE }
-    }
+    // ---------- Native answer: WebView background/foreground helpers ----------
+    // (Kept for compatibility if needed, but Veil logic is mostly unused now as we use BroadcastReceiver)
 
     private fun wakeAndUnlockScreen() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -332,6 +285,11 @@ class MainActivity : AppCompatActivity() {
         applySettings(webView)
 
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                Log.d("DeenoraWebConsole", "${consoleMessage?.message()} -- From line ${consoleMessage?.lineNumber()} of ${consoleMessage?.sourceId()}")
+                return super.onConsoleMessage(consoleMessage)
+            }
+
             override fun onPermissionRequest(request: PermissionRequest?) {
                 val host = request?.origin?.host ?: ""
                 if (request != null && (host == "deenora.app" || host.endsWith(".deenora.app"))) {
@@ -671,10 +629,8 @@ class MainActivity : AppCompatActivity() {
             this@MainActivity.isCallRinging = true
             runOnUiThread {
                 Log.d(TAG, "Web triggered incoming call: $callerName ($callId)")
-                CallService.stop(this@MainActivity)
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    CallService.start(this@MainActivity, callerName, callId)
-                }, 300)
+                // CallService.stop(this@MainActivity) - REMOVED: Do not interrupt ringing
+                CallService.start(this@MainActivity, callerName, callId)
             }
         }
 
@@ -683,14 +639,10 @@ class MainActivity : AppCompatActivity() {
             this@MainActivity.isCallActive = true
             this@MainActivity.isCallRinging = false
             runOnUiThread {
-                cancelAnswerFallback()
-                hideNativeUiVeil()
                 CallService.stop(this@MainActivity)
                 val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 am.mode = AudioManager.MODE_IN_COMMUNICATION
                 OngoingCallService.start(this@MainActivity)
-                // WebRTC answer pathano sesh — ekhon native call UI-te firot jao
-                try { moveTaskToBack(true) } catch (_: Exception) {}
             }
         }
 

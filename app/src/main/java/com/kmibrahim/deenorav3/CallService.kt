@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.Ringtone
+import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.Handler
@@ -56,7 +57,7 @@ class CallService : Service() {
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
-    private var ringtone: Ringtone? = null
+    private var mediaPlayer: MediaPlayer? = null
     private var vibrator: Vibrator? = null
     private val handler = Handler(Looper.getMainLooper())
     private val timeoutRunnable = Runnable {
@@ -178,21 +179,28 @@ class CallService : Service() {
         }
     }
 
+    private var isRinging = false
+
     private fun startRinging() {
-        stopRinging()
+        if (isRinging) return
+        isRinging = true
+        
+        stopRingingInternal()
         try {
             val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
                 ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            ringtone = RingtoneManager.getRingtone(this, uri)?.apply {
-                audioAttributes = AudioAttributes.Builder()
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(this@CallService, uri)
+                setAudioAttributes(AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) isLooping = true
-                play()
+                    .build())
+                isLooping = true
+                prepare()
+                start()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Ringtone play failed", e)
+            Log.e(TAG, "MediaPlayer play failed", e)
         }
 
         try {
@@ -200,7 +208,7 @@ class CallService : Service() {
             if (audio.ringerMode != AudioManager.RINGER_MODE_SILENT) {
                 @Suppress("DEPRECATION")
                 vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                val pattern = longArrayOf(0, 800, 500, 800, 500, 800)
+                val pattern = longArrayOf(0, 1000, 1000) // proper loop pattern (wait, vibrate, wait)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0))
                 } else {
@@ -214,8 +222,16 @@ class CallService : Service() {
     }
 
     private fun stopRinging() {
-        try { ringtone?.stop() } catch (_: Exception) {}
-        ringtone = null
+        isRinging = false
+        stopRingingInternal()
+    }
+
+    private fun stopRingingInternal() {
+        try { 
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+        } catch (_: Exception) {}
+        mediaPlayer = null
         try { vibrator?.cancel() } catch (_: Exception) {}
         vibrator = null
     }
@@ -223,14 +239,6 @@ class CallService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val notificationManager = getSystemService(NotificationManager::class.java) ?: return
-
-            // সাউন্ড ইউআরআই
-            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val audioAttributes = AudioAttributes.Builder()
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                .build()
 
             val channel = NotificationChannel(
                 CHANNEL_ID,
@@ -242,8 +250,7 @@ class CallService : Service() {
                 vibrationPattern = longArrayOf(0, 800, 500, 800, 500, 800)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 setBypassDnd(true)
-                // সাউন্ড সেট করা অতি জরুরি — সাউন্ড ছাড়া অ্যান্ড্রয়েড ব্যানার বা ফুল-স্ক্রিন ব্লক করে!
-                setSound(soundUri, audioAttributes)
+                // Removed setSound to avoid conflict with startRinging() loop
             }
             notificationManager.createNotificationChannel(channel)
         }
@@ -297,9 +304,6 @@ class CallService : Service() {
         }
         val declinePendingIntent = PendingIntent.getService(this, 102, declineIntent, piFlags)
 
-        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-
         // ৪. Custom floating-card UI — prototype "Floating Notification" screen.
         // (CallStyle er bodle: white card, navy icon, Decline/Accept button.)
         val cardView = RemoteViews(packageName, R.layout.notification_incoming_call).apply {
@@ -315,7 +319,6 @@ class CallService : Service() {
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setSound(soundUri)
             .setVibrate(longArrayOf(0, 800, 500, 800, 500, 800))
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .setContentIntent(fullScreenPendingIntent)
@@ -327,8 +330,7 @@ class CallService : Service() {
             .setTimeoutAfter(RING_TIMEOUT_MS)
 
         val notification = notificationBuilder.build()
-        // FLAG_INSISTENT দিলে অ্যান্ড্রয়েড নিজে থেকে রিংটোন রিপিট করে
-        notification.flags = notification.flags or Notification.FLAG_INSISTENT
+        // Removed FLAG_INSISTENT to rely purely on startRinging() looping (Issue 5 fix)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)

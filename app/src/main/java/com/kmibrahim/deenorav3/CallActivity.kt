@@ -229,17 +229,12 @@ class CallActivity : AppCompatActivity() {
     /** MainActivity ke background engine hishebe signal pathano (UI dekhabe na). */
     private fun signalToWeb(action: String) {
         try {
-            val i = Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                putExtra("type", "incoming_call")
+            val i = Intent("com.kmibrahim.deenorav3.WEB_CALL_ACTION").apply {
+                setPackage(packageName)
                 putExtra("call_action", action)
-                putExtra("native_ui", true)
                 putExtra("call_id", callId)
-                putExtra("caller_name", callerName)
-                putExtra("CALLER_NAME", callerName)
-                putExtra("CALL_ID", callId)
             }
-            startActivity(i)
+            sendBroadcast(i)
         } catch (_: Exception) {
         }
     }
@@ -247,14 +242,13 @@ class CallActivity : AppCompatActivity() {
     private fun toggleMute() {
         isMuted = !isMuted
         try {
-            val i = Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                putExtra("native_ui", true)
+            val i = Intent("com.kmibrahim.deenorav3.WEB_CALL_ACTION").apply {
+                setPackage(packageName)
                 putExtra("audio_action", "mute_toggle")
                 putExtra("muted", isMuted)
                 putExtra("call_id", callId)
             }
-            startActivity(i)
+            sendBroadcast(i)
         } catch (_: Exception) {
         }
         refreshToggleIcons()
