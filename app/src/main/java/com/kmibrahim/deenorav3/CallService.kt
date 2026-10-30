@@ -4,6 +4,7 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.Ringtone
@@ -17,8 +18,8 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.Settings
 import android.util.Log
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
-import androidx.core.app.Person
 
 class CallService : Service() {
 
@@ -289,9 +290,9 @@ class CallService : Service() {
         }
         val answerPendingIntent = PendingIntent.getActivity(this, 101, answerIntent, piFlags)
 
-        // ৩. Decline ইনটেন্ট (কল কেটে দেওয়া)
+        // ৩. Decline ইনটেন্ট — CallService DECLINE_CALL: admin ke signaling + dismiss
         val declineIntent = Intent(this, CallService::class.java).apply {
-            action = "STOP_SERVICE"
+            action = "DECLINE_CALL"
             putExtra("CALL_ID", callId)
         }
         val declinePendingIntent = PendingIntent.getService(this, 102, declineIntent, piFlags)
@@ -299,17 +300,18 @@ class CallService : Service() {
         val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
 
-        // কল পার্সন বিল্ডার
-        val callerPerson = Person.Builder()
-            .setName(callerName)
-            .setImportant(true)
-            .build()
+        // ৪. Custom floating-card UI — prototype "Floating Notification" screen.
+        // (CallStyle er bodle: white card, navy icon, Decline/Accept button.)
+        val cardView = RemoteViews(packageName, R.layout.notification_incoming_call).apply {
+            setTextViewText(R.id.notif_title, callerName)
+            setTextViewText(R.id.notif_subtitle, "Incoming Voice Call...")
+            setOnClickPendingIntent(R.id.btn_accept, answerPendingIntent)
+            setOnClickPendingIntent(R.id.btn_decline, declinePendingIntent)
+        }
 
         val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
-            // সিস্টেম ড্রয়েবল ব্যবহার করা হলো যেন কোনো অ্যান্ড্রয়েড ভার্সনে ড্রপ না হয়
             .setSmallIcon(android.R.drawable.sym_call_incoming)
-            .setContentTitle("ইনকামিং ভয়েস কল")
-            .setContentText("$callerName থেকে কল আসছে...")
+            .setColor(Color.parseColor("#2563EB"))
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -317,19 +319,12 @@ class CallService : Service() {
             .setVibrate(longArrayOf(0, 800, 500, 800, 500, 800))
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .setContentIntent(fullScreenPendingIntent)
+            .setCustomContentView(cardView)
+            .setCustomBigContentView(cardView)
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setOngoing(true)
             .setAutoCancel(false)
             .setTimeoutAfter(RING_TIMEOUT_MS)
-            // আধুনিক অ্যান্ড্রয়েডের অফিশিয়াল CallStyle (WhatsApp/Meet-এর মতো ডিজাইন)
-            .setStyle(
-                NotificationCompat.CallStyle.forIncomingCall(
-                    callerPerson,
-                    declinePendingIntent,
-                    answerPendingIntent
-                )
-            )
-            .addAction(android.R.drawable.ic_menu_call, "উত্তর দিন (Answer)", answerPendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "কেটে দিন (Decline)", declinePendingIntent)
 
         val notification = notificationBuilder.build()
         // FLAG_INSISTENT দিলে অ্যান্ড্রয়েড নিজে থেকে রিংটোন রিপিট করে
