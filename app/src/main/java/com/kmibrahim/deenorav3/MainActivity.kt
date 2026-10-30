@@ -698,11 +698,12 @@ class MainActivity : AppCompatActivity() {
         fun onIncomingCall(callerName: String, callId: String) {
             this@MainActivity.isCallActive = false
             this@MainActivity.isCallRinging = true
-            // DO NOT call CallService.start here.
-            // FCM (FcmService.onMessageReceived) already started CallService.
-            // The web's duplicate trigger was causing the 1-second auto-cut
-            // by re-initializing the ringing service.
-            Log.d(TAG, "Web reported incoming call (FCM already handles it, no action): $callerName ($callId)")
+            runOnUiThread {
+                Log.d(TAG, "Web triggered incoming call: $callerName ($callId)")
+                // CallService has time-based dedup (ignores starts within 2s),
+                // so FCM+web double-trigger is safe.
+                CallService.start(this@MainActivity, callerName, callId)
+            }
         }
 
         @JavascriptInterface
