@@ -118,6 +118,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        try { cancelAnswerFallback() } catch (_: Exception) {}
         try {
             unregisterReceiver(onDownloadComplete)
         } catch (e: Exception) { }
@@ -159,7 +160,12 @@ class MainActivity : AppCompatActivity() {
                 "window.__nativeCallUi=true;if(typeof window.handleNativeCallAction==='function') window.handleNativeCallAction('answer','$callId');",
                 null
             )
-            if (isNativeUi) moveTaskToBack(true)
+            // getUserMedia backgrounded WebView-e hang korte pare — tai web
+            // callStarted() na bola porjonto MainActivity foreground-e thakbe.
+            // (Kalo porda: user dashboard-er flash dekhbe na.)
+            // Safety: 10s-e callStarted na eleo background-e chole jabe.
+            showNativeUiVeil()
+            scheduleAnswerFallback()
             return
         }
 
@@ -203,6 +209,49 @@ class MainActivity : AppCompatActivity() {
                 url.contains("accounts.google.com") ||
                 url.contains("__/auth/") ||
                 url.contains("googleid.googleapis.com")
+    }
+
+    // ---------- Native answer: WebView foreground-e rakhar helper ----------
+
+    private val answerHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var answerFallback: Runnable? = null
+    private var nativeVeil: android.view.View? = null
+
+    /** Web callStarted() na bola porjonto 10s fallback: tokhon background-e jabe. */
+    private fun scheduleAnswerFallback() {
+        cancelAnswerFallback()
+        answerFallback = Runnable {
+            answerFallback = null
+            hideNativeUiVeil()
+            try { moveTaskToBack(true) } catch (_: Exception) {}
+        }
+        answerHandler.postDelayed(answerFallback!!, 10_000L)
+    }
+
+    private fun cancelAnswerFallback() {
+        answerFallback?.let { answerHandler.removeCallbacks(it) }
+        answerFallback = null
+    }
+
+    /** Kalo porda — answer-er somoy dashboard flash lukate. */
+    private fun showNativeUiVeil() {
+        runOnUiThread {
+            if (nativeVeil == null) {
+                nativeVeil = android.view.View(this).apply {
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                    layoutParams = android.view.ViewGroup.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                }
+                (window.decorView as? android.view.ViewGroup)?.addView(nativeVeil)
+            }
+            nativeVeil?.visibility = android.view.View.VISIBLE
+        }
+    }
+
+    private fun hideNativeUiVeil() {
+        runOnUiThread { nativeVeil?.visibility = android.view.View.GONE }
     }
 
     private fun wakeAndUnlockScreen() {
@@ -636,10 +685,14 @@ class MainActivity : AppCompatActivity() {
             this@MainActivity.isCallActive = true
             this@MainActivity.isCallRinging = false
             runOnUiThread {
+                cancelAnswerFallback()
+                hideNativeUiVeil()
                 CallService.stop(this@MainActivity)
                 val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 am.mode = AudioManager.MODE_IN_COMMUNICATION
                 OngoingCallService.start(this@MainActivity)
+                // WebRTC answer pathano sesh — ekhon native call UI-te firot jao
+                try { moveTaskToBack(true) } catch (_: Exception) {}
             }
         }
 
