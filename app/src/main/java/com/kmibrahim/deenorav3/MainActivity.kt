@@ -368,10 +368,8 @@ class MainActivity : AppCompatActivity() {
                 if (url != null && url.contains("deenora.app") && !url.contains("__/auth/")) {
                     injectBlobHook(view)
                     injectDownloadScripts(view)
-                    // Native call UI mode — web jeno call modal na dekhay
-                    if (nativeCallUi) {
-                        view?.evaluateJavascript("window.__nativeCallUi=true;", null)
-                    }
+                    // Native call UI mode — web jeno call modal na dekhay (Always true)
+                    view?.evaluateJavascript("window.__nativeCallUi=true; sessionStorage.setItem('deenora_native_ui', '1');", null)
                 }
                 CookieManager.getInstance().flush()
             }
@@ -747,7 +745,7 @@ class MainActivity : AppCompatActivity() {
         /** Web jante parbe native call UI active kina (parent app e web modal lukabe). */
         @JavascriptInterface
         fun isNativeCallUi(): Boolean {
-            return this@MainActivity.nativeCallUi
+            return true // Always return true so web NEVER shows its own call modal
         }
     }
 }
