@@ -279,6 +279,19 @@ class CallService : Service() {
         }
         val contentPendingIntent = PendingIntent.getActivity(this, 100, contentIntent, piFlags)
 
+        // ১.৫ Answer ইনটেন্ট — MainActivity te jabe (web call UI, call_action=answer)
+        val answerIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("caller_name", callerName)
+            putExtra("call_id", callId)
+            putExtra("type", "incoming_call")
+            putExtra("call_action", "answer")
+            putExtra("CALLER_NAME", callerName)
+            putExtra("CALL_ID", callId)
+            putExtra("INCOMING_CALL", true)
+        }
+        val answerPendingIntent = PendingIntent.getActivity(this, 101, answerIntent, piFlags)
+
         // ২. Decline ইনটেন্ট — CallService DECLINE_CALL: admin ke signaling + dismiss
         val declineIntent = Intent(this, CallService::class.java).apply {
             action = "DECLINE_CALL"
@@ -297,9 +310,10 @@ class CallService : Service() {
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setVibrate(longArrayOf(0, 800, 500, 800, 500, 800))
                 .setContentIntent(contentPendingIntent)
+                .addAction(android.R.drawable.ic_menu_call, "Answer", answerPendingIntent)
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePendingIntent)
                 .setOngoing(true)
-                .setAutoCancel(true)
+                .setAutoCancel(false)
                 .setTimeoutAfter(RING_TIMEOUT_MS)
 
             val notification = notificationBuilder.build()
