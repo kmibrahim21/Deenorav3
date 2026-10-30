@@ -45,7 +45,6 @@ class MainActivity : AppCompatActivity() {
     private var isCallActive = false
     // Call ringing tracking (v2 fix: ringing obosthay isCallActive=false thake)
     private var isCallRinging = false
-    private var lastIncomingCallTime = 0L
     // Native call UI mode: CallActivity jokhon call screen dekhay, tokhon
     // MainActivity sudhu background audio-engine — kono web call UI dekhabe na.
     private var nativeCallUi = false
@@ -699,11 +698,11 @@ class MainActivity : AppCompatActivity() {
         fun onIncomingCall(callerName: String, callId: String) {
             this@MainActivity.isCallActive = false
             this@MainActivity.isCallRinging = true
-            lastIncomingCallTime = System.currentTimeMillis()
-            runOnUiThread {
-                Log.d(TAG, "Web triggered incoming call: $callerName ($callId)")
-                CallService.start(this@MainActivity, callerName, callId)
-            }
+            // DO NOT call CallService.start here.
+            // FCM (FcmService.onMessageReceived) already started CallService.
+            // The web's duplicate trigger was causing the 1-second auto-cut
+            // by re-initializing the ringing service.
+            Log.d(TAG, "Web reported incoming call (FCM already handles it, no action): $callerName ($callId)")
         }
 
         @JavascriptInterface

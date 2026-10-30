@@ -69,6 +69,7 @@ class CallService : Service() {
     private var mediaPlayer: MediaPlayer? = null
     private var vibrator: Vibrator? = null
     private var currentRingingCallId: String? = null
+    private var lastStartTime = 0L
     private val handler = Handler(Looper.getMainLooper())
     private val timeoutRunnable = Runnable {
         Log.d(TAG, "Call timed out after 45s, stopping CallService")
@@ -115,39 +116,51 @@ class CallService : Service() {
             return START_NOT_STICKY
         }
 
-        val callerName = intent?.getStringExtra("caller_name")
-            ?: intent?.getStringExtra("CALLER_NAME")
-            ?: "মাদরাসা এডমিন"
-        val callId = intent?.getStringExtra("call_id")
-            ?: intent?.getStringExtra("CALL_ID")
-            ?: ""
-
-        if (callId.isNotEmpty() && callId == currentRingingCallId) {
-            Log.d(TAG, "Already ringing for callId: $callId, ignoring duplicate start command")
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastStartTime < 2000) {
+            Log.d(TAG, "Ignoring duplicate start command (time-based dedup)")
             return START_NOT_STICKY
         }
-        currentRingingCallId = callId
+        lastStartTime = currentTime
 
-        Log.d(TAG, "Processing incoming call from: $callerName (callId: $callId)")
+        try {
+            val callerName = intent?.getStringExtra("caller_name")
+                ?: intent?.getStringExtra("CALLER_NAME")
+                ?: "মাদরাসা এডমিন"
+            val callId = intent?.getStringExtra("call_id")
+                ?: intent?.getStringExtra("CALL_ID")
+                ?: ""
 
-        // ১. স্ক্রিন লাইট সাথে সাথে জ্বালিয়ে রাখা
-        acquireScreenWakeLock()
+            if (callId == currentRingingCallId) {
+                Log.d(TAG, "Already ringing for callId: $callId, ignoring duplicate start command")
+                return START_NOT_STICKY
+            }
+            // Track current ringing call ID even if empty, as time-based dedup will prevent rapid duplicate empty IDs
+            currentRingingCallId = callId
 
-        // ২. হাই-প্রায়োরিটি চ্যানেল তৈরি
-        createNotificationChannel()
+            Log.d(TAG, "Processing incoming call from: $callerName (callId: $callId)")
 
-        // ৩. নোটিফিকেশন ও ফোরগ্রাউন্ড সার্ভিস রান
-        showIncomingCallNotification(callerName, callId)
+            // ১. স্ক্রিন লাইট সাথে সাথে জ্বালিয়ে রাখা
+            acquireScreenWakeLock()
 
-        // ৪. রিংটোন ও ভাইব্রেশন প্লে
-        startRinging()
+            // ২. হাই-প্রায়োরিটি চ্যানেল তৈরি
+            createNotificationChannel()
 
-        // ৫. ফুল-স্ক্রিনে অ্যাক্টিভিটি লঞ্চ করার চেষ্টা (Overlay বা Unlocked থাকলে)
-        launchCallActivity(callerName, callId, isAnswer = false)
+            // ৩. নোটিফিকেশন ও ফোরগ্রাউন্ড সার্ভিস রান
+            showIncomingCallNotification(callerName, callId)
 
-        // ৬. ৪৫ সেকেন্ড পর অটোমেটিক বন্ধ
-        handler.removeCallbacks(timeoutRunnable)
-        handler.postDelayed(timeoutRunnable, RING_TIMEOUT_MS)
+            // ৪. রিংটোন ও ভাইব্রেশন প্লে
+            startRinging()
+
+            // ৫. ফুল-স্ক্রিনে অ্যাক্টিভিটি লঞ্চ করার চেষ্টা (Overlay বা Unlocked থাকলে)
+            launchCallActivity(callerName, callId, isAnswer = false)
+
+            // ৬. ৪৫ সেকেন্ড পর অটোমেটিক বন্ধ
+            handler.removeCallbacks(timeoutRunnable)
+            handler.postDelayed(timeoutRunnable, RING_TIMEOUT_MS)
+        } catch (e: Exception) {
+            Log.e(TAG, "FATAL error processing incoming call in CallService", e)
+        }
 
         return START_NOT_STICKY
     }
@@ -328,44 +341,44 @@ class CallService : Service() {
 
         // ৪. Custom floating-card UI — prototype "Floating Notification" screen.
         // (CallStyle er bodle: white card, navy icon, Decline/Accept button.)
-        val cardView = RemoteViews(packageName, R.layout.notification_incoming_call).apply {
-            setTextViewText(R.id.notif_title, callerName)
-            setTextViewText(R.id.notif_subtitle, "Incoming Voice Call...")
-            setOnClickPendingIntent(R.id.btn_accept, answerPendingIntent)
-            setOnClickPendingIntent(R.id.btn_decline, declinePendingIntent)
-        }
-
-        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.sym_call_incoming)
-            .setColor(Color.parseColor("#2563EB"))
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setVibrate(longArrayOf(0, 800, 500, 800, 500, 800))
-            .setFullScreenIntent(fullScreenPendingIntent, true)
-            .setContentIntent(fullScreenPendingIntent)
-            .setCustomContentView(cardView)
-            .setCustomBigContentView(cardView)
-            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
-            .setOngoing(true)
-            .setAutoCancel(false)
-            .setTimeoutAfter(RING_TIMEOUT_MS)
-
-        val notification = notificationBuilder.build()
-        // Removed FLAG_INSISTENT to rely purely on startRinging() looping (Issue 5 fix)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
-
-        // এক্সপ্লিসিট নোটিফাই দিয়ে স্ক্রিনের উপরে Heads-Up ব্যানার নিশ্চিত করা
         try {
+            val cardView = RemoteViews(packageName, R.layout.notification_incoming_call).apply {
+                setTextViewText(R.id.notif_title, callerName)
+                setTextViewText(R.id.notif_subtitle, "Incoming Voice Call...")
+                setOnClickPendingIntent(R.id.btn_accept, answerPendingIntent)
+                setOnClickPendingIntent(R.id.btn_decline, declinePendingIntent)
+            }
+
+            val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.sym_call_incoming)
+                .setColor(Color.parseColor("#2563EB"))
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setVibrate(longArrayOf(0, 800, 500, 800, 500, 800))
+                .setFullScreenIntent(fullScreenPendingIntent, true)
+                .setContentIntent(fullScreenPendingIntent)
+                .setCustomContentView(cardView)
+                .setCustomBigContentView(cardView)
+                .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+                .setOngoing(true)
+                .setAutoCancel(false)
+                .setTimeoutAfter(RING_TIMEOUT_MS)
+
+            val notification = notificationBuilder.build()
+            // Removed FLAG_INSISTENT to rely purely on startRinging() looping (Issue 5 fix)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+
+            // এক্সপ্লিসিট নোটিফাই দিয়ে স্ক্রিনের উপরে Heads-Up ব্যানার নিশ্চিত করা
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.notify(NOTIFICATION_ID, notification)
         } catch (e: Exception) {
-            Log.w(TAG, "NotificationManager notify failed: ${e.message}")
+            Log.e(TAG, "FATAL error showing incoming call notification", e)
         }
     }
 
