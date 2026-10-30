@@ -68,9 +68,11 @@ class CallService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var mediaPlayer: MediaPlayer? = null
     private var vibrator: Vibrator? = null
+    private var currentRingingCallId: String? = null
     private val handler = Handler(Looper.getMainLooper())
     private val timeoutRunnable = Runnable {
         Log.d(TAG, "Call timed out after 45s, stopping CallService")
+        currentRingingCallId = null
         stopSelf()
     }
 
@@ -119,6 +121,12 @@ class CallService : Service() {
         val callId = intent?.getStringExtra("call_id")
             ?: intent?.getStringExtra("CALL_ID")
             ?: ""
+
+        if (callId.isNotEmpty() && callId == currentRingingCallId) {
+            Log.d(TAG, "Already ringing for callId: $callId, ignoring duplicate start command")
+            return START_NOT_STICKY
+        }
+        currentRingingCallId = callId
 
         Log.d(TAG, "Processing incoming call from: $callerName (callId: $callId)")
 
@@ -362,6 +370,7 @@ class CallService : Service() {
     }
 
     private fun removeNotification() {
+        currentRingingCallId = null
         releaseScreenWakeLock()
         stopRinging()
         try {
@@ -379,6 +388,7 @@ class CallService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        currentRingingCallId = null
         handler.removeCallbacks(timeoutRunnable)
         removeNotification()
         super.onDestroy()
