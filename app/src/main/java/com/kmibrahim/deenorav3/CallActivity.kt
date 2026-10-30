@@ -226,15 +226,29 @@ class CallActivity : AppCompatActivity() {
         finishCallUi()
     }
 
-    /** MainActivity ke background engine hishebe signal pathano (UI dekhabe na). */
+    /** MainActivity ke foreground e ene signal pathano (mic access er jonno). */
     private fun signalToWeb(action: String) {
         try {
-            val i = Intent("com.kmibrahim.deenorav3.WEB_CALL_ACTION").apply {
-                setPackage(packageName)
-                putExtra("call_action", action)
-                putExtra("call_id", callId)
+            if (action == "answer") {
+                val i = Intent(this, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    putExtra("type", "incoming_call")
+                    putExtra("call_action", action)
+                    putExtra("native_ui", true)
+                    putExtra("call_id", callId)
+                    putExtra("caller_name", callerName)
+                    putExtra("CALLER_NAME", callerName)
+                    putExtra("CALL_ID", callId)
+                }
+                startActivity(i)
+            } else {
+                val i = Intent("com.kmibrahim.deenorav3.WEB_CALL_ACTION").apply {
+                    setPackage(packageName)
+                    putExtra("call_action", action)
+                    putExtra("call_id", callId)
+                }
+                sendBroadcast(i)
             }
-            sendBroadcast(i)
         } catch (_: Exception) {
         }
     }

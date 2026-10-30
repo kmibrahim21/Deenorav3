@@ -45,6 +45,7 @@ class MainActivity : AppCompatActivity() {
     private var isCallActive = false
     // Call ringing tracking (v2 fix: ringing obosthay isCallActive=false thake)
     private var isCallRinging = false
+    private var lastIncomingCallTime = 0L
     // Native call UI mode: CallActivity jokhon call screen dekhay, tokhon
     // MainActivity sudhu background audio-engine — kono web call UI dekhabe na.
     private var nativeCallUi = false
@@ -68,14 +69,26 @@ class MainActivity : AppCompatActivity() {
 
             when (action) {
                 "answer" -> {
-                    webView.evaluateJavascript(
-                        "window.__nativeCallUi=true; " +
-                        "if(typeof window.handleNativeCallAction==='function') { " +
-                        "  console.log('Deenora: handleNativeCallAction executing answer'); " +
-                        "  window.handleNativeCallAction('answer','$callId'); " +
-                        "} else { console.log('Deenora: handleNativeCallAction NOT FOUND'); }",
-                        null
-                    )
+                    // Bring MainActivity to the front for mic access
+                    val bringToFrontIntent = Intent(context, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    }
+                    context?.startActivity(bringToFrontIntent)
+
+                    showNativeUiVeil()
+                    scheduleAnswerFallback()
+
+                    // Delay JS eval by 800ms to allow WebView to become foreground
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        webView.evaluateJavascript(
+                            "window.__nativeCallUi=true; " +
+                            "if(typeof window.handleNativeCallAction==='function') { " +
+                            "  console.log('Deenora: handleNativeCallAction executing answer'); " +
+                            "  window.handleNativeCallAction('answer','$callId'); " +
+                            "} else { console.log('Deenora: handleNativeCallAction NOT FOUND'); }",
+                            null
+                        )
+                    }, 800)
                 }
                 "decline", "end" -> {
                     webView.evaluateJavascript(
@@ -183,6 +196,21 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        val callAction = intent.getStringExtra("call_action")
+        val callId = intent.getStringExtra("call_id") ?: intent.getStringExtra("CALL_ID") ?: ""
+        val onDeenora = webView.url?.contains("deenora.app") == true
+
+        if (callAction == "answer" && onDeenora) {
+            webView.evaluateJavascript(
+                "window.__nativeCallUi=true; " +
+                "if(typeof window.handleNativeCallAction==='function') { " +
+                "  window.handleNativeCallAction('answer','$callId'); " +
+                "}",
+                null
+            )
+            return
+        }
+
         // Guard v2: ringing BA active call cholakalin kono tap-e WebView reload kore call katbe na
         if (isCallActive || isCallRinging) {
             Log.d(TAG, "Call ringing/active, skipping reload")
@@ -205,7 +233,51 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------- Native answer: WebView background/foreground helpers ----------
-    // (Kept for compatibility if needed, but Veil logic is mostly unused now as we use BroadcastReceiver)
+
+    private val answerHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var answerFallback: Runnable? = null
+    private var nativeVeil: android.view.View? = null
+
+    private fun scheduleAnswerFallback() {
+        cancelAnswerFallback()
+        answerFallback = Runnable {
+            answerFallback = null
+            hideNativeUiVeil()
+            // Fallback: bring CallActivity back just in case JS failed
+            try {
+                val i = Intent(this, CallActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                }
+                startActivity(i)
+            } catch (_: Exception) {}
+        }
+        answerHandler.postDelayed(answerFallback!!, 10_000L)
+    }
+
+    private fun cancelAnswerFallback() {
+        answerFallback?.let { answerHandler.removeCallbacks(it) }
+        answerFallback = null
+    }
+
+    private fun showNativeUiVeil() {
+        runOnUiThread {
+            if (nativeVeil == null) {
+                nativeVeil = android.view.View(this).apply {
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                    layoutParams = android.view.ViewGroup.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                }
+                (window.decorView as? android.view.ViewGroup)?.addView(nativeVeil)
+            }
+            nativeVeil?.visibility = android.view.View.VISIBLE
+        }
+    }
+
+    private fun hideNativeUiVeil() {
+        runOnUiThread { nativeVeil?.visibility = android.view.View.GONE }
+    }
 
     private fun wakeAndUnlockScreen() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -620,16 +692,16 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun stopRinging() {
             this@MainActivity.isCallRinging = false
-            CallService.stop(this@MainActivity)
+            CallService.stopRingtoneOnly(this@MainActivity)
         }
 
         @JavascriptInterface
         fun onIncomingCall(callerName: String, callId: String) {
             this@MainActivity.isCallActive = false
             this@MainActivity.isCallRinging = true
+            lastIncomingCallTime = System.currentTimeMillis()
             runOnUiThread {
                 Log.d(TAG, "Web triggered incoming call: $callerName ($callId)")
-                // CallService.stop(this@MainActivity) - REMOVED: Do not interrupt ringing
                 CallService.start(this@MainActivity, callerName, callId)
             }
         }
@@ -639,10 +711,20 @@ class MainActivity : AppCompatActivity() {
             this@MainActivity.isCallActive = true
             this@MainActivity.isCallRinging = false
             runOnUiThread {
+                cancelAnswerFallback()
+                hideNativeUiVeil()
                 CallService.stop(this@MainActivity)
                 val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 am.mode = AudioManager.MODE_IN_COMMUNICATION
                 OngoingCallService.start(this@MainActivity)
+                
+                // WebRTC answer pathano sesh — ekhon CallActivity (native call UI) ke firot ano
+                try {
+                    val i = Intent(this@MainActivity, CallActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    }
+                    startActivity(i)
+                } catch (_: Exception) {}
             }
         }
 

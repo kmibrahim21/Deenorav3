@@ -51,6 +51,15 @@ class CallService : Service() {
             } catch (_: Exception) {}
         }
 
+        fun stopRingtoneOnly(context: Context) {
+            try {
+                val intent = Intent(context, CallService::class.java).apply {
+                    action = "STOP_RINGTONE_ONLY"
+                }
+                context.startService(intent)
+            } catch (_: Exception) {}
+        }
+
         fun cancelIfMatches(context: Context, callId: String?) {
             stop(context)
         }
@@ -68,6 +77,11 @@ class CallService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         Log.d(TAG, "onStartCommand action: $action")
+
+        if (action == "STOP_RINGTONE_ONLY") {
+            stopRingingInternal()
+            return START_NOT_STICKY
+        }
 
         if (action == "STOP_SERVICE" || action == "DECLINE_CALL") {
             // Notification theke Decline: admin keo janate hobe (signaling),
@@ -182,10 +196,9 @@ class CallService : Service() {
     private var isRinging = false
 
     private fun startRinging() {
-        if (isRinging) return
+        stopRingingInternal()
         isRinging = true
         
-        stopRingingInternal()
         try {
             val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
                 ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
@@ -227,6 +240,7 @@ class CallService : Service() {
     }
 
     private fun stopRingingInternal() {
+        isRinging = false
         try { 
             mediaPlayer?.stop()
             mediaPlayer?.release()
