@@ -148,26 +148,57 @@ class CallService : Service() {
 
             Log.d(TAG, "Processing incoming call from: $callerName (callId: $callId)")
 
-            // ১. স্ক্রিন লাইট সাথে সাথে জ্বালিয়ে রাখা
-            acquireScreenWakeLock()
+            // Step 1: acquireScreenWakeLock
+            try {
+                Log.d(TAG, "Step 1: acquireScreenWakeLock")
+                acquireScreenWakeLock()
+            } catch (t: Throwable) {
+                Log.e(TAG, "Step 1 FAILED", t)
+            }
 
-            // ২. হাই-প্রায়োরিটি চ্যানেল তৈরি
-            createNotificationChannel()
+            // Step 2: createNotificationChannel
+            try {
+                Log.d(TAG, "Step 2: createNotificationChannel")
+                createNotificationChannel()
+            } catch (t: Throwable) {
+                Log.e(TAG, "Step 2 FAILED", t)
+            }
 
-            // ৩. নোটিফিকেশন ও ফোরগ্রাউন্ড সার্ভিস রান
-            showIncomingCallNotification(callerName, callId)
+            // Step 3: showIncomingCallNotification
+            try {
+                Log.d(TAG, "Step 3: showIncomingCallNotification")
+                showIncomingCallNotification(callerName, callId)
+            } catch (t: Throwable) {
+                Log.e(TAG, "Step 3 FAILED", t)
+            }
 
-            // ৪. রিংটোন ও ভাইব্রেশন প্লে
-            startRinging()
+            // Step 4: startRinging
+            try {
+                Log.d(TAG, "Step 4: startRinging")
+                startRinging()
+            } catch (t: Throwable) {
+                Log.e(TAG, "Step 4 FAILED", t)
+            }
 
-            // ৫. ফুল-স্ক্রিনে অ্যাক্টিভিটি লঞ্চ করার চেষ্টা (Overlay বা Unlocked থাকলে)
-            launchCallActivity(callerName, callId, isAnswer = false)
+            // Step 5: launchCallActivity
+            try {
+                Log.d(TAG, "Step 5: launchCallActivity")
+                launchCallActivity(callerName, callId, isAnswer = false)
+            } catch (t: Throwable) {
+                Log.e(TAG, "Step 5 FAILED", t)
+            }
 
-            // ৬. ৪৫ সেকেন্ড পর অটোমেটিক বন্ধ
-            handler.removeCallbacks(timeoutRunnable)
-            handler.postDelayed(timeoutRunnable, RING_TIMEOUT_MS)
-        } catch (e: Exception) {
-            Log.e(TAG, "FATAL error processing incoming call in CallService", e)
+            // Step 6: schedule timeout
+            try {
+                Log.d(TAG, "Step 6: schedule timeout")
+                handler.removeCallbacks(timeoutRunnable)
+                handler.postDelayed(timeoutRunnable, RING_TIMEOUT_MS)
+            } catch (t: Throwable) {
+                Log.e(TAG, "Step 6 FAILED", t)
+            }
+
+        } catch (t: Throwable) {
+            Log.e(TAG, "FATAL error processing incoming call in CallService", t)
         }
 
         return START_NOT_STICKY
@@ -199,12 +230,7 @@ class CallService : Service() {
     private fun launchCallActivity(callerName: String, callId: String, isAnswer: Boolean) {
         try {
             val activityIntent = Intent(this, CallActivity::class.java).apply {
-                action = Intent.ACTION_MAIN
-                addCategory(Intent.CATEGORY_LAUNCHER)
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
                 putExtra("caller_name", callerName)
                 putExtra("call_id", callId)
                 putExtra("type", "incoming_call")
@@ -304,12 +330,7 @@ class CallService : Service() {
 
         // ১. ফুল-স্ক্রিন ও ট্যাপ ইনটেন্ট (CallActivity ওপেন হবে — ektai native UI)
         val fullScreenIntent = Intent(this, CallActivity::class.java).apply {
-            action = Intent.ACTION_MAIN
-            addCategory(Intent.CATEGORY_LAUNCHER)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("caller_name", callerName)
             putExtra("call_id", callId)
             putExtra("type", "incoming_call")
@@ -323,12 +344,7 @@ class CallService : Service() {
         // CallActivity Answer chaple MainActivity ke background engine hishebe
         // chalu korbe (native_ui=true) — kono web call UI dekhabe na.
         val answerIntent = Intent(this, CallActivity::class.java).apply {
-            action = Intent.ACTION_MAIN
-            addCategory(Intent.CATEGORY_LAUNCHER)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("caller_name", callerName)
             putExtra("call_id", callId)
             putExtra("type", "incoming_call")
@@ -385,8 +401,8 @@ class CallService : Service() {
             // এক্সপ্লিসিট নোটিফাই দিয়ে স্ক্রিনের উপরে Heads-Up ব্যানার নিশ্চিত করা
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.notify(NOTIFICATION_ID, notification)
-        } catch (e: Exception) {
-            Log.e(TAG, "FATAL error showing incoming call notification", e)
+        } catch (t: Throwable) {
+            Log.e(TAG, "FATAL error showing incoming call notification", t)
         }
     }
 
