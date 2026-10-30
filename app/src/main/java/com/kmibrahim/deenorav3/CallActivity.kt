@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -47,6 +48,7 @@ class CallActivity : AppCompatActivity() {
     companion object {
         const val ACTION_CALL_DISMISSED = "com.kmibrahim.deenorav3.CALL_DISMISSED"
         private const val INCOMING_TIMEOUT_MS = 45_000L
+        private const val TAG = "CallActivity"
     }
 
     private enum class UiState { INCOMING, CONNECTED }
@@ -91,36 +93,46 @@ class CallActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        applyLockScreenFlags()
-        readExtras(intent)
+        try {
+            Log.d(TAG, "CallActivity onCreate starting")
+            applyLockScreenFlags()
+            readExtras(intent)
 
-        val filter = IntentFilter(ACTION_CALL_DISMISSED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(dismissReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(dismissReceiver, filter)
-        }
+            val filter = IntentFilter(ACTION_CALL_DISMISSED)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(dismissReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(dismissReceiver, filter)
+            }
 
-        root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            background = navyGradient()
-            val p = dp(28)
-            setPadding(p, dp(72), p, dp(40))
-        }
-        setContentView(root)
+            root = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                background = navyGradient()
+                val p = dp(28)
+                setPadding(p, dp(72), p, dp(40))
+            }
+            setContentView(root)
 
-        // Notification er Answer button theke sorasori ele
-        if (intent.getStringExtra("call_action") == "answer") {
-            onAnswerClicked()
-        } else {
-            showIncomingUi()
-            handler.postDelayed(incomingTimeout, INCOMING_TIMEOUT_MS)
+            // Notification er Answer button theke sorasori ele
+            if (intent.getStringExtra("call_action") == "answer") {
+                onAnswerClicked()
+            } else {
+                showIncomingUi()
+                handler.postDelayed(incomingTimeout, INCOMING_TIMEOUT_MS)
+            }
+            Log.d(TAG, "CallActivity onCreate finished successfully")
+        } catch (t: Throwable) {
+            Log.e(TAG, "FATAL: CallActivity onCreate crashed", t)
+            try {
+                Toast.makeText(this, "CallActivity Crash: ${t.message}", Toast.LENGTH_LONG).show()
+            } catch (_: Throwable) {}
+            finish()
         }
     }
 

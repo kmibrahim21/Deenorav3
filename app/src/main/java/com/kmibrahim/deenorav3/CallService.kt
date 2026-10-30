@@ -77,7 +77,6 @@ class CallService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var mediaPlayer: MediaPlayer? = null
     private var vibrator: Vibrator? = null
-    private var lastStartTime = 0L
     private val handler = Handler(Looper.getMainLooper())
     private val timeoutRunnable = Runnable {
         Log.d(TAG, "Call timed out after 45s, stopping CallService")
@@ -112,24 +111,11 @@ class CallService : Service() {
                     }
                     startActivity(signalIntent)
                 } catch (_: Exception) {}
-                // CallActivity khola thakle setao bondho hobe
-                try {
-                    sendBroadcast(
-                        Intent(CallActivity.ACTION_CALL_DISMISSED).setPackage(packageName)
-                    )
-                } catch (_: Exception) {}
             }
             removeNotification()
             stopSelf()
             return START_NOT_STICKY
         }
-
-        val currentTime = System.currentTimeMillis()
-        if (currentTime - lastStartTime < 2000) {
-            Log.d(TAG, "Ignoring duplicate start command (time-based dedup)")
-            return START_NOT_STICKY
-        }
-        lastStartTime = currentTime
 
         try {
             val callerName = intent?.getStringExtra("caller_name")
@@ -139,66 +125,19 @@ class CallService : Service() {
                 ?: intent?.getStringExtra("CALL_ID")
                 ?: ""
 
-            if (callId == currentRingingCallId) {
-                Log.d(TAG, "Already ringing for callId: $callId, ignoring duplicate start command")
-                return START_NOT_STICKY
-            }
-            // Track current ringing call ID even if empty, as time-based dedup will prevent rapid duplicate empty IDs
             currentRingingCallId = callId
 
             Log.d(TAG, "Processing incoming call from: $callerName (callId: $callId)")
 
-            // Step 1: acquireScreenWakeLock
-            try {
-                Log.d(TAG, "Step 1: acquireScreenWakeLock")
-                acquireScreenWakeLock()
-            } catch (t: Throwable) {
-                Log.e(TAG, "Step 1 FAILED", t)
-            }
+            acquireScreenWakeLock()
+            createNotificationChannel()
+            showIncomingCallNotification(callerName, callId)
+            startRinging()
 
-            // Step 2: createNotificationChannel
-            try {
-                Log.d(TAG, "Step 2: createNotificationChannel")
-                createNotificationChannel()
-            } catch (t: Throwable) {
-                Log.e(TAG, "Step 2 FAILED", t)
-            }
-
-            // Step 3: showIncomingCallNotification
-            try {
-                Log.d(TAG, "Step 3: showIncomingCallNotification")
-                showIncomingCallNotification(callerName, callId)
-            } catch (t: Throwable) {
-                Log.e(TAG, "Step 3 FAILED", t)
-            }
-
-            // Step 4: startRinging
-            try {
-                Log.d(TAG, "Step 4: startRinging")
-                startRinging()
-            } catch (t: Throwable) {
-                Log.e(TAG, "Step 4 FAILED", t)
-            }
-
-            // Step 5: launchCallActivity
-            try {
-                Log.d(TAG, "Step 5: launchCallActivity")
-                launchCallActivity(callerName, callId, isAnswer = false)
-            } catch (t: Throwable) {
-                Log.e(TAG, "Step 5 FAILED", t)
-            }
-
-            // Step 6: schedule timeout
-            try {
-                Log.d(TAG, "Step 6: schedule timeout")
-                handler.removeCallbacks(timeoutRunnable)
-                handler.postDelayed(timeoutRunnable, RING_TIMEOUT_MS)
-            } catch (t: Throwable) {
-                Log.e(TAG, "Step 6 FAILED", t)
-            }
-
+            handler.removeCallbacks(timeoutRunnable)
+            handler.postDelayed(timeoutRunnable, RING_TIMEOUT_MS)
         } catch (t: Throwable) {
-            Log.e(TAG, "FATAL error processing incoming call in CallService", t)
+            Log.e(TAG, "Error processing incoming call", t)
         }
 
         return START_NOT_STICKY
@@ -328,8 +267,8 @@ class CallService : Service() {
     private fun showIncomingCallNotification(callerName: String, callId: String) {
         val piFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
-        // ১. ফুল-স্ক্রিন ও ট্যাপ ইনটেন্ট (CallActivity ওপেন হবে — ektai native UI)
-        val fullScreenIntent = Intent(this, CallActivity::class.java).apply {
+        // ১. ট্যাপ ইনটেন্ট (MainActivity ওপেন হবে — web call UI)
+        val contentIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("caller_name", callerName)
             putExtra("call_id", callId)
@@ -338,58 +277,32 @@ class CallService : Service() {
             putExtra("CALL_ID", callId)
             putExtra("INCOMING_CALL", true)
         }
-        val fullScreenPendingIntent = PendingIntent.getActivity(this, 100, fullScreenIntent, piFlags)
+        val contentPendingIntent = PendingIntent.getActivity(this, 100, contentIntent, piFlags)
 
-        // ২. Answer ইনটেন্ট — CallActivity te jabe (native UI), MainActivity te NA.
-        // CallActivity Answer chaple MainActivity ke background engine hishebe
-        // chalu korbe (native_ui=true) — kono web call UI dekhabe na.
-        val answerIntent = Intent(this, CallActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra("caller_name", callerName)
-            putExtra("call_id", callId)
-            putExtra("type", "incoming_call")
-            putExtra("call_action", "answer")
-            putExtra("CALLER_NAME", callerName)
-            putExtra("CALL_ID", callId)
-            putExtra("INCOMING_CALL", true)
-            putExtra("ACTION", "ANSWER")
-        }
-        val answerPendingIntent = PendingIntent.getActivity(this, 101, answerIntent, piFlags)
-
-        // ৩. Decline ইনটেন্ট — CallService DECLINE_CALL: admin ke signaling + dismiss
+        // ২. Decline ইনটেন্ট — CallService DECLINE_CALL: admin ke signaling + dismiss
         val declineIntent = Intent(this, CallService::class.java).apply {
             action = "DECLINE_CALL"
             putExtra("CALL_ID", callId)
         }
         val declinePendingIntent = PendingIntent.getService(this, 102, declineIntent, piFlags)
 
-        // ৪. Custom floating-card UI — prototype "Floating Notification" screen.
-        // (CallStyle er bodle: white card, navy icon, Decline/Accept button.)
         try {
-            val cardView = RemoteViews(packageName, R.layout.notification_incoming_call).apply {
-                setTextViewText(R.id.notif_title, callerName)
-                setTextViewText(R.id.notif_subtitle, "Incoming Voice Call...")
-                setOnClickPendingIntent(R.id.btn_accept, answerPendingIntent)
-                setOnClickPendingIntent(R.id.btn_decline, declinePendingIntent)
-            }
-
             val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.sym_call_incoming)
                 .setColor(Color.parseColor("#2563EB"))
+                .setContentTitle(callerName)
+                .setContentText("Incoming Voice Call...")
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setVibrate(longArrayOf(0, 800, 500, 800, 500, 800))
-                .setContentIntent(fullScreenPendingIntent)
-                .setCustomContentView(cardView)
-                .setCustomBigContentView(cardView)
-                .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+                .setContentIntent(contentPendingIntent)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePendingIntent)
                 .setOngoing(true)
-                .setAutoCancel(false)
+                .setAutoCancel(true)
                 .setTimeoutAfter(RING_TIMEOUT_MS)
 
             val notification = notificationBuilder.build()
-            // Removed FLAG_INSISTENT to rely purely on startRinging() looping (Issue 5 fix)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
@@ -397,11 +310,10 @@ class CallService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
 
-            // এক্সপ্লিসিট নোটিফাই দিয়ে স্ক্রিনের উপরে Heads-Up ব্যানার নিশ্চিত করা
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.notify(NOTIFICATION_ID, notification)
         } catch (t: Throwable) {
-            Log.e(TAG, "FATAL error showing incoming call notification", t)
+            Log.e(TAG, "Error showing incoming call notification", t)
         }
     }
 
