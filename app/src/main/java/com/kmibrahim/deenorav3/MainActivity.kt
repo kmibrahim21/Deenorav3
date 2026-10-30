@@ -730,6 +730,10 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun callEnded() {
+            if (this@MainActivity.isCallRinging && !this@MainActivity.isCallActive) {
+                Log.d(TAG, "Ignoring callEnded from web during ringing phase")
+                return
+            }
             this@MainActivity.isCallActive = false
             this@MainActivity.isCallRinging = false
             runOnUiThread {
