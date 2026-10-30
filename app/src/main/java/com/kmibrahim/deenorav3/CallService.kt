@@ -31,6 +31,9 @@ class CallService : Service() {
         private const val TAG = "CallService"
         private const val RING_TIMEOUT_MS = 45_000L
 
+        @Volatile
+        private var currentRingingCallId: String? = null
+
         fun start(context: Context, callerName: String, callId: String) {
             val intent = Intent(context, CallService::class.java).apply {
                 putExtra("caller_name", callerName)
@@ -61,14 +64,19 @@ class CallService : Service() {
         }
 
         fun cancelIfMatches(context: Context, callId: String?) {
-            stop(context)
+            val current = currentRingingCallId
+            if (!callId.isNullOrBlank() && callId == current) {
+                Log.d(TAG, "call_cancel matches current call ($callId) — stopping")
+                stop(context)
+            } else {
+                Log.d(TAG, "Ignoring stale call_cancel (got: $callId, ringing: $current)")
+            }
         }
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var mediaPlayer: MediaPlayer? = null
     private var vibrator: Vibrator? = null
-    private var currentRingingCallId: String? = null
     private var lastStartTime = 0L
     private val handler = Handler(Looper.getMainLooper())
     private val timeoutRunnable = Runnable {
