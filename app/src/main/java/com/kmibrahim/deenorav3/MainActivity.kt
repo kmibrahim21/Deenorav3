@@ -48,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     // Native call UI mode: CallActivity jokhon call screen dekhay, tokhon
     // MainActivity sudhu background audio-engine — kono web call UI dekhabe na.
     private var nativeCallUi = false
+    private var pendingAnswerCallId: String? = null
 
     private val callActionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -76,6 +77,8 @@ class MainActivity : AppCompatActivity() {
 
                     showNativeUiVeil()
                     scheduleAnswerFallback()
+
+                    pendingAnswerCallId = callId
 
                     // Delay JS eval by 800ms to allow WebView to become foreground
                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -131,6 +134,12 @@ class MainActivity : AppCompatActivity() {
         wakeAndUnlockScreen()
 
         handleFcmData(intent)
+
+        val callAction = intent.getStringExtra("call_action")
+        val callId = intent.getStringExtra("call_id") ?: intent.getStringExtra("CALL_ID")
+        if (callAction == "answer" && !callId.isNullOrBlank()) {
+            pendingAnswerCallId = callId
+        }
 
         nativeCallUi = intent.getBooleanExtra("native_ui", false)
 
@@ -425,6 +434,18 @@ class MainActivity : AppCompatActivity() {
                         view?.evaluateJavascript("window.__nativeCallUi=true; sessionStorage.setItem('deenora_native_ui', '1');", null)
                     } else {
                         view?.evaluateJavascript("window.__nativeCallUi=false; try{sessionStorage.removeItem('deenora_native_ui');}catch(e){}", null)
+                    }
+
+                    // Cold start delivery of pending answer callId
+                    pendingAnswerCallId?.let { id ->
+                        pendingAnswerCallId = null
+                        view?.evaluateJavascript(
+                            "if(typeof window.handleNativeCallAction==='function') { " +
+                            "  console.log('Deenora: delivering pending answer onPageFinished for call: $id'); " +
+                            "  window.handleNativeCallAction('answer','$id'); " +
+                            "} else { console.log('Deenora: handleNativeCallAction NOT FOUND onPageFinished'); }",
+                            null
+                        )
                     }
                 }
                 CookieManager.getInstance().flush()
