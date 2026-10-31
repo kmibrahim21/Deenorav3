@@ -44,6 +44,12 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <intent-filter>
+                <action android:name="OPEN_ACTIVITY_1"/>
+                <action android:name="com.kmibrahim.deenorav3.NOTIFICATION_CLICK"/>
+                <action android:name="com.kmibrahim.deenorav3.FCM_CLICK"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
         </activity>
 
         <!-- taskAffinity alada: native_ui mode e MainActivity moveTaskToBack korle

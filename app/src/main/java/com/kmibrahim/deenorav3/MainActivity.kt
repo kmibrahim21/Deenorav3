@@ -130,6 +130,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         wakeAndUnlockScreen()
 
+        handleFcmData(intent)
+
         nativeCallUi = intent.getBooleanExtra("native_ui", false)
 
         webView = WebView(this)
@@ -182,6 +184,8 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         wakeAndUnlockScreen()
+
+        handleFcmData(intent)
 
         val isNativeUi = intent.getBooleanExtra("native_ui", false)
         if (isNativeUi) nativeCallUi = true else nativeCallUi = false
@@ -295,13 +299,33 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun handleFcmData(intent: Intent?) {
+        if (intent == null) return
+        val action = intent.action
+        val extras = intent.extras
+        Log.d(TAG, "handleFcmData: action=$action, extras=$extras")
+
+        val isFcmAction = action == "OPEN_ACTIVITY_1" ||
+                action == "com.kmibrahim.deenorav3.NOTIFICATION_CLICK" ||
+                action == "com.kmibrahim.deenorav3.FCM_CLICK"
+
+        val callerName = extras?.getString("caller_name") ?: extras?.getString("CALLER_NAME")
+        val callId = extras?.getString("call_id") ?: extras?.getString("CALL_ID")
+        val type = extras?.getString("type")
+
+        if (isFcmAction || !callerName.isNullOrBlank() || !callId.isNullOrBlank() || type == "incoming_call") {
+            Log.d(TAG, "FCM data extracted: isFcmAction=$isFcmAction, callerName=$callerName, callId=$callId, type=$type")
+            CallService.stopRingtoneOnly(this)
+        }
+    }
+
     private fun buildStartUrl(intent: Intent?): String {
         val extras = intent?.extras ?: return "https://deenora.app"
-        val callerName = extras.getString("caller_name")
-        val callId = extras.getString("call_id")
+        val callerName = extras.getString("caller_name") ?: extras.getString("CALLER_NAME")
+        val callId = extras.getString("call_id") ?: extras.getString("CALL_ID")
         val type = extras.getString("type")
 
-        if (!callerName.isNullOrBlank() || type == "incoming_call") {
+        if (!callerName.isNullOrBlank() || type == "incoming_call" || !callId.isNullOrBlank()) {
             val params = StringBuilder("https://deenora.app?fcm_tap=1")
             if (!callId.isNullOrBlank()) params.append("&call_id=").append(Uri.encode(callId))
             if (!callerName.isNullOrBlank()) params.append("&caller_name=").append(Uri.encode(callerName))
@@ -397,8 +421,11 @@ class MainActivity : AppCompatActivity() {
                 if (url != null && url.contains("deenora.app") && !url.contains("__/auth/")) {
                     injectBlobHook(view)
                     injectDownloadScripts(view)
-                    // Native call UI mode — web jeno call modal na dekhay (Always true)
-                    view?.evaluateJavascript("window.__nativeCallUi=true; sessionStorage.setItem('deenora_native_ui', '1');", null)
+                    if (nativeCallUi) {
+                        view?.evaluateJavascript("window.__nativeCallUi=true; sessionStorage.setItem('deenora_native_ui', '1');", null)
+                    } else {
+                        view?.evaluateJavascript("window.__nativeCallUi=false; try{sessionStorage.removeItem('deenora_native_ui');}catch(e){}", null)
+                    }
                 }
                 CookieManager.getInstance().flush()
             }
@@ -718,13 +745,15 @@ class MainActivity : AppCompatActivity() {
                 am.mode = AudioManager.MODE_IN_COMMUNICATION
                 OngoingCallService.start(this@MainActivity)
                 
-                // WebRTC answer pathano sesh — ekhon CallActivity (native call UI) ke firot ano
-                try {
-                    val i = Intent(this@MainActivity, CallActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                    }
-                    startActivity(i)
-                } catch (_: Exception) {}
+                if (nativeCallUi) {
+                    // WebRTC answer pathano sesh — CallActivity (native call UI) ke firot ano
+                    try {
+                        val i = Intent(this@MainActivity, CallActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                        }
+                        startActivity(i)
+                    } catch (_: Exception) {}
+                }
             }
         }
 
@@ -783,7 +812,7 @@ class MainActivity : AppCompatActivity() {
         /** Web jante parbe native call UI active kina (parent app e web modal lukabe). */
         @JavascriptInterface
         fun isNativeCallUi(): Boolean {
-            return true // Always return true so web NEVER shows its own call modal
+            return this@MainActivity.nativeCallUi
         }
     }
 }
