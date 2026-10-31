@@ -663,11 +663,23 @@ class MainActivity : AppCompatActivity() {
             am.isSpeakerphoneOn = true
         } else if (intent?.getStringExtra("call_action") == "decline") {
             CallService.stop(this)
-            // Decline hole ongoing service o bondho (age miss chilo)
             OngoingCallService.stop(this)
             val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
             am.mode = AudioManager.MODE_NORMAL
             am.isSpeakerphoneOn = false
+            // Signal the web to reject — admin must stop ringing
+            val declineId = intent?.getStringExtra("call_id") ?: intent?.getStringExtra("CALL_ID") ?: ""
+            runOnUiThread {
+                try {
+                    webView.evaluateJavascript(
+                        "if(typeof window.handleNativeCallAction==='function') " +
+                        "window.handleNativeCallAction('decline','$declineId');",
+                        null
+                    )
+                } catch (_: Exception) {}
+                // Also try via URL param as backup (for cold start)
+                // The web reads ?answer=0 on load
+            }
         } else if (intent?.getStringExtra("call_action") == "end") {
             CallService.stop(this)
             OngoingCallService.stop(this)
