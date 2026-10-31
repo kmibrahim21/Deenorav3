@@ -49,6 +49,7 @@ class MainActivity : AppCompatActivity() {
     // MainActivity sudhu background audio-engine — kono web call UI dekhabe na.
     private var nativeCallUi = false
     private var pendingAnswerCallId: String? = null
+    private var pendingDeclineCallId: String? = null
 
     private val callActionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -447,6 +448,16 @@ class MainActivity : AppCompatActivity() {
                             null
                         )
                     }
+
+                    pendingDeclineCallId?.let { did ->
+                        Log.d(TAG, "onPageFinished: delivering pending decline for $did")
+                        view?.evaluateJavascript(
+                            "if(typeof window.handleNativeCallAction==='function') " +
+                            "window.handleNativeCallAction('decline','$did');",
+                            null
+                        )
+                        pendingDeclineCallId = null
+                    }
                 }
                 CookieManager.getInstance().flush()
             }
@@ -662,13 +673,10 @@ class MainActivity : AppCompatActivity() {
             am.mode = AudioManager.MODE_IN_COMMUNICATION
             am.isSpeakerphoneOn = true
         } else if (intent?.getStringExtra("call_action") == "decline") {
-            CallService.stop(this)
-            OngoingCallService.stop(this)
-            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            am.mode = AudioManager.MODE_NORMAL
-            am.isSpeakerphoneOn = false
-            // Signal the web to reject — admin must stop ringing
             val declineId = intent?.getStringExtra("call_id") ?: intent?.getStringExtra("CALL_ID") ?: ""
+            // Queue for onPageFinished (cold start) — web may not be loaded yet
+            pendingDeclineCallId = declineId
+            // Try immediate JS call too (warm start)
             runOnUiThread {
                 try {
                     webView.evaluateJavascript(
@@ -677,9 +685,12 @@ class MainActivity : AppCompatActivity() {
                         null
                     )
                 } catch (_: Exception) {}
-                // Also try via URL param as backup (for cold start)
-                // The web reads ?answer=0 on load
             }
+            CallService.stop(this)
+            OngoingCallService.stop(this)
+            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.mode = AudioManager.MODE_NORMAL
+            am.isSpeakerphoneOn = false
         } else if (intent?.getStringExtra("call_action") == "end") {
             CallService.stop(this)
             OngoingCallService.stop(this)
