@@ -153,6 +153,13 @@ class MainActivity : AppCompatActivity() {
         setupLaunchers()
         setupWebView()
 
+        // Clear session ONLY on very first run after fresh install so login screen appears
+        val pushPrefs = getSharedPreferences("deenora_push", Context.MODE_PRIVATE)
+        if (!pushPrefs.getBoolean("has_launched_once", false)) {
+            WebStorage.getInstance().deleteAllData()
+            pushPrefs.edit().putBoolean("has_launched_once", true).apply()
+        }
+
         webView.loadUrl(buildStartUrl(intent))
 
         setupBackButton()

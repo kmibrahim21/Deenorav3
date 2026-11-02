@@ -1,5 +1,6 @@
 package com.kmibrahim.deenorav3
 
+import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -127,6 +128,14 @@ class FcmService : FirebaseMessagingService() {
             return
         }
 
+        // If the FCM message has a notification payload and app is in background,
+        // Android system already automatically displays the system notification.
+        // Avoid starting CallService (which shows a duplicate notification).
+        if (message.notification != null && !isAppInForeground()) {
+            Log.d(TAG, "App is in background with notification payload; letting system notification handle it")
+            return
+        }
+
         if (!callerName.isNullOrBlank()) {
             // Incoming call -> full-screen call UI
             CallService.start(this, callerName, callId)
@@ -138,6 +147,17 @@ class FcmService : FirebaseMessagingService() {
             } else {
                 Log.w(TAG, "Push ignored: no caller_name and no title/body")
             }
+        }
+    }
+
+    private fun isAppInForeground(): Boolean {
+        return try {
+            val appProcessInfo = ActivityManager.RunningAppProcessInfo()
+            ActivityManager.getMyMemoryState(appProcessInfo)
+            appProcessInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+                    appProcessInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
+        } catch (_: Exception) {
+            false
         }
     }
 
