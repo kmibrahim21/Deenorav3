@@ -154,8 +154,7 @@ class FcmService : FirebaseMessagingService() {
         return try {
             val appProcessInfo = ActivityManager.RunningAppProcessInfo()
             ActivityManager.getMyMemoryState(appProcessInfo)
-            appProcessInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
-                    appProcessInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
+            appProcessInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
         } catch (_: Exception) {
             false
         }

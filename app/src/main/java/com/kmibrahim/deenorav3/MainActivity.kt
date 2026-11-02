@@ -204,6 +204,40 @@ class MainActivity : AppCompatActivity() {
 
         handleFcmData(intent)
 
+        val incomingCallAction = intent.getStringExtra("call_action")
+        val incomingCallId = intent.getStringExtra("call_id") ?: intent.getStringExtra("CALL_ID") ?: ""
+        if (incomingCallAction == "answer" && incomingCallId.isNotBlank()) {
+            pendingAnswerCallId = incomingCallId
+        } else if (incomingCallAction == "decline" && incomingCallId.isNotBlank()) {
+            pendingDeclineCallId = incomingCallId
+        }
+
+        // Deliver pending call actions immediately if WebView is already loaded (warm start / minimized app)
+        val onDeenora = webView.url?.contains("deenora.app") == true
+        if (onDeenora) {
+            pendingAnswerCallId?.let { id ->
+                Log.d(TAG, "onNewIntent: delivering pending answer for $id")
+                webView.evaluateJavascript(
+                    "window.__nativeCallUi=true; " +
+                    "if(typeof window.handleNativeCallAction==='function') { " +
+                    "  console.log('Deenora: delivering pending answer onNewIntent for call: $id'); " +
+                    "  window.handleNativeCallAction('answer','$id'); " +
+                    "} else { console.log('Deenora: handleNativeCallAction NOT FOUND onNewIntent'); }",
+                    null
+                )
+                pendingAnswerCallId = null
+            }
+            pendingDeclineCallId?.let { did ->
+                Log.d(TAG, "onNewIntent: delivering pending decline for $did")
+                webView.evaluateJavascript(
+                    "if(typeof window.handleNativeCallAction==='function') " +
+                    "window.handleNativeCallAction('decline','$did');",
+                    null
+                )
+                pendingDeclineCallId = null
+            }
+        }
+
         val isNativeUi = intent.getBooleanExtra("native_ui", false)
         if (isNativeUi) nativeCallUi = true else nativeCallUi = false
 
@@ -218,7 +252,6 @@ class MainActivity : AppCompatActivity() {
 
         val callAction = intent.getStringExtra("call_action")
         val callId = intent.getStringExtra("call_id") ?: intent.getStringExtra("CALL_ID") ?: ""
-        val onDeenora = webView.url?.contains("deenora.app") == true
 
         if (callAction == "answer" && onDeenora) {
             webView.evaluateJavascript(
