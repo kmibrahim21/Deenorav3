@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private var nativeCallUi = false
     private var pendingAnswerCallId: String? = null
     private var pendingDeclineCallId: String? = null
+    private var pendingIncomingCallId: String? = null
 
     private val callActionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -160,6 +161,17 @@ class MainActivity : AppCompatActivity() {
             pushPrefs.edit().putBoolean("has_launched_once", true).apply()
         }
 
+        // Check for incoming call intent to show web call UI
+        val incomingAction = intent.getStringExtra("call_action")
+        val incomingId = intent.getStringExtra("call_id") ?: intent.getStringExtra("CALL_ID")
+        val isIncoming = intent.getStringExtra("type") == "incoming_call" ||
+                intent.getBooleanExtra("INCOMING_CALL", false) ||
+                incomingAction == "incoming" ||
+                (!incomingId.isNullOrBlank() && incomingAction.isNullOrBlank())
+        if (isIncoming && incomingAction != "answer" && incomingAction != "decline" && !incomingId.isNullOrBlank()) {
+            pendingIncomingCallId = incomingId
+        }
+
         webView.loadUrl(buildStartUrl(intent))
 
         setupBackButton()
@@ -210,6 +222,8 @@ class MainActivity : AppCompatActivity() {
             pendingAnswerCallId = incomingCallId
         } else if (incomingCallAction == "decline" && incomingCallId.isNotBlank()) {
             pendingDeclineCallId = incomingCallId
+        } else if ((incomingCallAction == "incoming" || intent.getStringExtra("type") == "incoming_call" || intent.getBooleanExtra("INCOMING_CALL", false) || (incomingCallId.isNotBlank() && incomingCallAction.isNullOrBlank())) && incomingCallId.isNotBlank()) {
+            pendingIncomingCallId = incomingCallId
         }
 
         // Deliver pending call actions immediately if WebView is already loaded (warm start / minimized app)
@@ -235,6 +249,15 @@ class MainActivity : AppCompatActivity() {
                     null
                 )
                 pendingDeclineCallId = null
+            }
+            pendingIncomingCallId?.let { iid ->
+                Log.d(TAG, "onNewIntent: delivering pending incoming for $iid")
+                webView.evaluateJavascript(
+                    "if(typeof window.handleNativeCallAction==='function') " +
+                    "window.handleNativeCallAction('incoming','$iid');",
+                    null
+                )
+                pendingIncomingCallId = null
             }
         }
 
@@ -497,6 +520,16 @@ class MainActivity : AppCompatActivity() {
                             null
                         )
                         pendingDeclineCallId = null
+                    }
+
+                    pendingIncomingCallId?.let { iid ->
+                        Log.d(TAG, "onPageFinished: delivering pending incoming for $iid")
+                        view?.evaluateJavascript(
+                            "if(typeof window.handleNativeCallAction==='function') " +
+                            "window.handleNativeCallAction('incoming','$iid');",
+                            null
+                        )
+                        pendingIncomingCallId = null
                     }
                 }
                 CookieManager.getInstance().flush()
