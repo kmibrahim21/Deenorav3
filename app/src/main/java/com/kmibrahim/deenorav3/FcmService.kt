@@ -137,7 +137,12 @@ class FcmService : FirebaseMessagingService() {
         }
 
         if (!callerName.isNullOrBlank()) {
-            // Incoming call -> full-screen call UI
+            if (isAppInForeground()) {
+                // App is open — web will show the call screen, no floating needed
+                Log.d(TAG, "App in foreground — skipping CallService, web handles UI")
+                return
+            }
+            // App is closed/background — show floating notification
             CallService.start(this, callerName, callId)
         } else {
             val title = data["title"] ?: message.notification?.title ?: "Deenora"

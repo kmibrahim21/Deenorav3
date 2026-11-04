@@ -759,6 +759,29 @@ class MainActivity : AppCompatActivity() {
                     )
                 } catch (_: Exception) {}
             }
+            // Direct backend fallback for killed-app decline — don't rely solely on WebView JS
+            if (declineId.isNotBlank()) {
+                Thread {
+                    var conn: java.net.HttpURLConnection? = null
+                    try {
+                        val url = java.net.URL("https://deenora.app/api/call")
+                        conn = url.openConnection() as java.net.HttpURLConnection
+                        conn.requestMethod = "POST"
+                        conn.setRequestProperty("Content-Type", "application/json")
+                        conn.connectTimeout = 10000
+                        conn.readTimeout = 10000
+                        conn.doOutput = true
+                        val body = """{"action":"relay_call_signal","event":"call:reject","call_id":"$declineId","payload":{"callId":"$declineId","reason":"declined"}}"""
+                        conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                        val responseCode = conn.responseCode
+                        Log.d(TAG, "Direct backend decline signal sent, response: $responseCode")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Direct backend decline failed", e)
+                    } finally {
+                        conn?.disconnect()
+                    }
+                }.start()
+            }
             CallService.stop(this)
             OngoingCallService.stop(this)
             val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
